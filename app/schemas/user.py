@@ -34,3 +34,18 @@ class ParticipantOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class ParticipantQuickCreate(BaseModel):
+    nombre: str
+    grupo_id: int
+    github_username: str | None = None
+
+
+class ParticipantQuickOut(BaseModel):
+    participant_id: int
+    usuario_id: int
+    nombre: str
+    username: str
+    github_username: str | None
+    grupo_id: int

@@ -1,7 +1,7 @@
 from sqlalchemy import inspect, text
 
 from app.db.session import Base, engine
-from app.models import commit, evaluation, group, group_share_token, group_user, participant, ranking, repository, user
+from app.models import commit, evaluation, group, group_share_token, group_user, participant, project_evaluation, ranking, repository, user
 
 
 def sync_group_columns() -> None:

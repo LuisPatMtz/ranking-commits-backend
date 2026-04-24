@@ -9,14 +9,21 @@ Backend base para plataforma de ranking academico.
 ## Configuracion local
 1. Crea una base de datos local, por ejemplo: `ranking_commits`.
 2. Copia `.env.example` a `.env` y ajusta `DATABASE_URL`.
-3. Instala dependencias:
-   `c:/Users/luisp/Documents/Proyectos/ranking-commits/.venv/Scripts/python.exe -m pip install -r requirements.txt`
-4. Crea tablas iniciales:
-   `c:/Users/luisp/Documents/Proyectos/ranking-commits/.venv/Scripts/python.exe scripts/init_db.py`
+3. Crea y activa un entorno virtual:
+   - Windows PowerShell:
+     `python -m venv .venv`
+     `.\.venv\Scripts\Activate.ps1`
+   - Linux/macOS:
+     `python3 -m venv .venv`
+     `source .venv/bin/activate`
+4. Instala dependencias:
+   `python -m pip install -r requirements.txt`
+5. Crea tablas iniciales:
+   `python scripts/init_db.py`
    Si cambiaste el modelo de datos y quieres rehacer tablas locales:
-   `c:/Users/luisp/Documents/Proyectos/ranking-commits/.venv/Scripts/python.exe scripts/reset_db.py`
-5. Inicia API:
-   `c:/Users/luisp/Documents/Proyectos/ranking-commits/.venv/Scripts/python.exe -m uvicorn app.main:app --reload`
+   `python scripts/reset_db.py`
+6. Inicia API:
+   `python -m uvicorn app.main:app --reload`
 
 ## Endpoints base
 - GET /health

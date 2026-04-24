@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from secrets import token_urlsafe
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -9,12 +9,16 @@ from app.db.session import get_db
 from app.models.group import Group
 from app.models.group_share_token import GroupShareToken
 from app.models.group_user import GroupUser
+from app.models.participant import Participant
 from app.models.user import User, UserRole
 from app.schemas.group import (
     GroupCreate,
     GroupInviteCreatedResponse,
     GroupInviteNotificationOut,
     GroupOut,
+    GroupStudentAddRequest,
+    GroupStudentCandidateOut,
+    GroupStudentOut,
     GroupShareLinkResponse,
     GroupShareRequest,
     GroupShareResponse,
@@ -69,6 +73,21 @@ def _resolve_target_docente_or_404(db: Session, payload: GroupShareRequest, curr
 def _ensure_invite_not_expired(invite: GroupShareToken) -> None:
     if invite.expires_at <= datetime.now(timezone.utc):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="La invitacion ha expirado")
+
+
+def _resolve_owned_group_or_404(db: Session, group_id: int, current_user: User) -> Group:
+    if current_user.rol != UserRole.docente:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Solo docentes pueden administrar grupos")
+
+    group = (
+        db.query(Group)
+        .filter(Group.id == group_id)
+        .filter(Group.created_by_user_id == current_user.id)
+        .first()
+    )
+    if not group:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Grupo no encontrado o sin permisos")
+    return group
 
 
 def _clone_group_for_docente(db: Session, source_group: Group, target_docente: User) -> tuple[Group, int]:
@@ -139,6 +158,179 @@ def list_groups(db: Session = Depends(get_db), current_user: User = Depends(get_
         .order_by(Group.id.desc())
         .all()
     )
+
+
+@router.get("/{group_id}/alumnos", response_model=list[GroupStudentOut])
+def list_group_students(group_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    group = _resolve_owned_group_or_404(db, group_id, current_user)
+
+    rows = (
+        db.query(GroupUser, User, Participant)
+        .join(User, User.id == GroupUser.usuario_id)
+        .join(Participant, Participant.usuario_id == User.id)
+        .filter(GroupUser.grupo_id == group.id)
+        .order_by(User.nombre.asc())
+        .all()
+    )
+
+    return [
+        GroupStudentOut(
+            participant_id=participant.id,
+            usuario_id=user.id,
+            nombre=user.nombre,
+            username=user.username,
+            github_username=participant.github_username,
+            fecha_inicio=membership.fecha_inicio,
+            fecha_fin=membership.fecha_fin,
+        )
+        for membership, user, participant in rows
+    ]
+
+
+@router.get("/{group_id}/alumnos/disponibles", response_model=list[GroupStudentCandidateOut])
+def list_group_student_candidates(group_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    group = _resolve_owned_group_or_404(db, group_id, current_user)
+
+    current_member_ids = {
+        row[0]
+        for row in db.query(GroupUser.usuario_id)
+        .filter(GroupUser.grupo_id == group.id)
+        .all()
+    }
+
+    rows = (
+        db.query(User, Participant)
+        .join(Participant, Participant.usuario_id == User.id)
+        .filter(User.rol == UserRole.alumno)
+        .filter(User.activo.is_(True))
+        .filter(Participant.activo.is_(True))
+        .order_by(User.nombre.asc())
+        .all()
+    )
+
+    result: list[GroupStudentCandidateOut] = []
+    for user, participant in rows:
+        if user.id in current_member_ids:
+            continue
+        result.append(
+            GroupStudentCandidateOut(
+                participant_id=participant.id,
+                usuario_id=user.id,
+                nombre=user.nombre,
+                username=user.username,
+                github_username=participant.github_username,
+            )
+        )
+    return result
+
+
+@router.post("/{group_id}/alumnos", response_model=GroupStudentOut, status_code=status.HTTP_201_CREATED)
+def add_student_to_group(
+    group_id: int,
+    payload: GroupStudentAddRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    group = _resolve_owned_group_or_404(db, group_id, current_user)
+
+    participant: Participant | None = None
+    if payload.participant_id is not None:
+        participant = db.query(Participant).filter(Participant.id == payload.participant_id).first()
+    elif payload.usuario_id is not None:
+        participant = db.query(Participant).filter(Participant.usuario_id == payload.usuario_id).first()
+    else:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Debes enviar participant_id o usuario_id")
+
+    if not participant:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Participante no encontrado")
+    if not participant.activo:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El participante esta inactivo")
+
+    user = db.query(User).filter(User.id == participant.usuario_id).first()
+    if not user or user.rol != UserRole.alumno:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Alumno no encontrado")
+    if not user.activo:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El alumno esta inactivo")
+
+    exists = (
+        db.query(GroupUser)
+        .filter(GroupUser.grupo_id == group.id)
+        .filter(GroupUser.usuario_id == user.id)
+        .first()
+    )
+    if exists:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El alumno ya pertenece al grupo")
+
+    membership = GroupUser(
+        grupo_id=group.id,
+        usuario_id=user.id,
+        fecha_inicio=payload.fecha_inicio or date.today(),
+        fecha_fin=None,
+    )
+    db.add(membership)
+    db.commit()
+    db.refresh(membership)
+
+    participant = db.query(Participant).filter(Participant.usuario_id == user.id).first()
+    return GroupStudentOut(
+        participant_id=participant.id,
+        usuario_id=user.id,
+        nombre=user.nombre,
+        username=user.username,
+        github_username=participant.github_username,
+        fecha_inicio=membership.fecha_inicio,
+        fecha_fin=membership.fecha_fin,
+    )
+
+
+@router.delete("/{group_id}/alumnos/{usuario_id}")
+def remove_student_from_group(
+    group_id: int,
+    usuario_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    group = _resolve_owned_group_or_404(db, group_id, current_user)
+
+    membership = (
+        db.query(GroupUser)
+        .filter(GroupUser.grupo_id == group.id)
+        .filter(GroupUser.usuario_id == usuario_id)
+        .first()
+    )
+    if not membership:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Alumno no pertenece al grupo")
+
+    db.delete(membership)
+    db.commit()
+    return {"message": "Alumno removido del grupo"}
+
+
+@router.delete("/{group_id}/alumnos/participantes/{participant_id}")
+def remove_participant_from_group(
+    group_id: int,
+    participant_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    group = _resolve_owned_group_or_404(db, group_id, current_user)
+
+    participant = db.query(Participant).filter(Participant.id == participant_id).first()
+    if not participant:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Participante no encontrado")
+
+    membership = (
+        db.query(GroupUser)
+        .filter(GroupUser.grupo_id == group.id)
+        .filter(GroupUser.usuario_id == participant.usuario_id)
+        .first()
+    )
+    if not membership:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Participante no pertenece al grupo")
+
+    db.delete(membership)
+    db.commit()
+    return {"message": "Participante removido del grupo"}
 
 
 @router.get("/docentes/buscar", response_model=list[TeacherShareTarget])

@@ -1,3 +1,5 @@
+from datetime import date
+
 from pydantic import BaseModel
 
 
@@ -67,3 +69,45 @@ class GroupInviteCreatedResponse(BaseModel):
     invite_code: str
     target_docente_id: int
     target_docente_username: str
+
+
+class GroupStudentAddRequest(BaseModel):
+    participant_id: int | None = None
+    usuario_id: int | None = None
+    fecha_inicio: date | None = None
+
+
+class GroupStudentOut(BaseModel):
+    participant_id: int
+    usuario_id: int
+    nombre: str
+    username: str
+    github_username: str | None = None
+    fecha_inicio: date
+    fecha_fin: date | None = None
+
+
+class GroupStudentCandidateOut(BaseModel):
+    participant_id: int
+    usuario_id: int
+    nombre: str
+    username: str
+    github_username: str | None = None
+
+
+class GroupRankingItemOut(BaseModel):
+    rank: int
+    usuario_id: int
+    nombre: str
+    github_username: str | None = None
+    commits_count: int
+    commits_points: float
+    docente_grade: float
+    proyecto_grade: float
+    promedio: float
+
+
+class GroupRankingGradesUpdateRequest(BaseModel):
+    usuario_id: int
+    docente_grade: float | None = None
+    proyecto_grade: float | None = None
