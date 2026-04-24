@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+import re
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -12,6 +13,28 @@ from app.models.repository import Repository
 from app.models.user import User
 
 router = APIRouter(prefix="/github", tags=["github"])
+
+
+def _fetch_public_contributions_total(client: httpx.Client, github_username: str) -> int | None:
+    profile_resp = client.get(
+        f"https://github.com/users/{github_username}/contributions",
+        headers={
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "User-Agent": "Mozilla/5.0",
+        },
+    )
+    if profile_resp.status_code != 200:
+        return None
+
+    html = profile_resp.text
+    match = re.search(r"([\d,]+)\s+contributions?\s+in\s+the\s+last\s+year", html, re.IGNORECASE)
+    if not match:
+        return None
+
+    try:
+        return int(match.group(1).replace(",", ""))
+    except ValueError:
+        return None
 
 
 @router.post("/sync/{usuario_id}")
@@ -41,6 +64,8 @@ def sync_user_commits(
     synced_commits = 0
 
     with httpx.Client(timeout=20.0, headers=headers) as client:
+        contributions_total = _fetch_public_contributions_total(client, github_username)
+
         repos_resp = client.get(f"https://api.github.com/users/{github_username}/repos", params={"per_page": 100, "type": "owner", "sort": "updated"})
         if repos_resp.status_code != 200:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No se pudieron obtener repositorios de GitHub")
@@ -108,6 +133,9 @@ def sync_user_commits(
                 )
                 synced_commits += 1
 
+    participant.github_contributions_total = contributions_total
+    participant.github_contributions_updated_at = datetime.now(timezone.utc)
+
     db.commit()
 
     return {
@@ -116,5 +144,6 @@ def sync_user_commits(
         "github_username": github_username,
         "repos_nuevos": synced_repos,
         "commits_nuevos": synced_commits,
+        "contribuciones_totales": contributions_total,
         "since": since_iso,
     }

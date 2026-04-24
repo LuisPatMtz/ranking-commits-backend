@@ -16,6 +16,7 @@ from app.schemas.group import (
     GroupInviteCreatedResponse,
     GroupInviteNotificationOut,
     GroupOut,
+    GroupUpdate,
     GroupStudentAddRequest,
     GroupStudentCandidateOut,
     GroupStudentOut,
@@ -158,6 +159,23 @@ def list_groups(db: Session = Depends(get_db), current_user: User = Depends(get_
         .order_by(Group.id.desc())
         .all()
     )
+
+
+@router.put("/{group_id}", response_model=GroupOut)
+def update_group(
+    group_id: int,
+    payload: GroupUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    group = _resolve_owned_group_or_404(db, group_id, current_user)
+
+    group.nombre = payload.nombre
+    group.carrera = payload.carrera
+    group.semestre = payload.semestre
+    db.commit()
+    db.refresh(group)
+    return group
 
 
 @router.get("/{group_id}/alumnos", response_model=list[GroupStudentOut])

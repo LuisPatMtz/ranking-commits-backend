@@ -39,7 +39,22 @@ def sync_group_share_token_columns() -> None:
             )
 
 
+def sync_participant_columns() -> None:
+    inspector = inspect(engine)
+    if "participantes" not in inspector.get_table_names():
+        return
+
+    existing_columns = {column["name"] for column in inspector.get_columns("participantes")}
+
+    with engine.begin() as connection:
+        if "github_contributions_total" not in existing_columns:
+            connection.execute(text("ALTER TABLE participantes ADD COLUMN IF NOT EXISTS github_contributions_total INTEGER"))
+        if "github_contributions_updated_at" not in existing_columns:
+            connection.execute(text("ALTER TABLE participantes ADD COLUMN IF NOT EXISTS github_contributions_updated_at TIMESTAMPTZ"))
+
+
 def init_db() -> None:
     sync_group_columns()
     sync_group_share_token_columns()
+    sync_participant_columns()
     Base.metadata.create_all(bind=engine)

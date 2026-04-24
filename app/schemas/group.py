@@ -9,6 +9,12 @@ class GroupCreate(BaseModel):
     semestre: int
 
 
+class GroupUpdate(BaseModel):
+    nombre: str
+    carrera: str
+    semestre: int
+
+
 class GroupOut(BaseModel):
     id: int
     nombre: str
@@ -111,3 +117,19 @@ class GroupRankingGradesUpdateRequest(BaseModel):
     usuario_id: int
     docente_grade: float | None = None
     proyecto_grade: float | None = None
+
+
+class GeneralRankingItemOut(BaseModel):
+    rank: int
+    group_id: int
+    group_name: str
+    usuario_id: int
+    nombre: str
+    github_username: str | None = None
+    commits_count: int
+    contributions_count: int
+    metric_value: int
+    metric_points: float
+    docente_grade: float
+    proyecto_grade: float
+    total_score: float
