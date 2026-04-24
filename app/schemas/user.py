@@ -1,22 +1,35 @@
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 
 from app.models.user import UserRole
 
 
 class UserCreate(BaseModel):
     nombre: str
-    email: EmailStr
+    username: str
     password: str
     rol: UserRole
-    github_username: str | None = None
 
 
 class UserOut(BaseModel):
     id: int
     nombre: str
-    email: EmailStr
-    github_username: str | None = None
+    username: str
     rol: UserRole
+    activo: bool
+
+    class Config:
+        from_attributes = True
+
+
+class ParticipantCreate(BaseModel):
+    usuario_id: int
+    github_username: str | None = None
+
+
+class ParticipantOut(BaseModel):
+    id: int
+    usuario_id: int
+    github_username: str | None
     activo: bool
 
     class Config:

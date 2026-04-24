@@ -8,7 +8,12 @@ class Base(DeclarativeBase):
     pass
 
 
-engine = create_engine(settings.database_url, echo=False, future=True)
+engine = create_engine(
+    settings.database_url,
+    echo=False,
+    future=True,
+    connect_args={"connect_timeout": 5},
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 

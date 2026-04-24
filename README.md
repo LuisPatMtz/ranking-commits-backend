@@ -13,14 +13,19 @@ Backend base para plataforma de ranking academico.
    `c:/Users/luisp/Documents/Proyectos/ranking-commits/.venv/Scripts/python.exe -m pip install -r requirements.txt`
 4. Crea tablas iniciales:
    `c:/Users/luisp/Documents/Proyectos/ranking-commits/.venv/Scripts/python.exe scripts/init_db.py`
+   Si cambiaste el modelo de datos y quieres rehacer tablas locales:
+   `c:/Users/luisp/Documents/Proyectos/ranking-commits/.venv/Scripts/python.exe scripts/reset_db.py`
 5. Inicia API:
    `c:/Users/luisp/Documents/Proyectos/ranking-commits/.venv/Scripts/python.exe -m uvicorn app.main:app --reload`
 
 ## Endpoints base
 - GET /health
+- POST /api/v1/auth/register
 - POST /api/v1/auth/login
 - POST /api/v1/usuarios
 - GET /api/v1/usuarios
+- POST /api/v1/participantes
+- GET /api/v1/participantes
 - GET /api/v1/grupos
 - GET /api/v1/repositorios
 - POST /api/v1/github/sync/{usuario_id}
@@ -28,3 +33,7 @@ Backend base para plataforma de ranking academico.
 - GET /api/v1/evaluaciones
 - GET /api/v1/ranking
 - GET /api/v1/ranking/grupo/{grupo_id}
+
+## Nota de modelo
+- `usuarios`: nombre, username, password_hash, rol y estado.
+- `participantes`: datos de alumnos (relacion 1:1 con usuarios rol alumno) y github_username.

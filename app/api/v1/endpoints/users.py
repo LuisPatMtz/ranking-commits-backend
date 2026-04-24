@@ -11,15 +11,14 @@ router = APIRouter(prefix="/usuarios", tags=["usuarios"])
 
 @router.post("", response_model=UserOut, status_code=status.HTTP_201_CREATED)
 def create_user(payload: UserCreate, db: Session = Depends(get_db)):
-    exists = db.query(User).filter(User.email == payload.email).first()
+    exists = db.query(User).filter(User.username == payload.username).first()
     if exists:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Email ya registrado")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Username ya registrado")
 
     user = User(
         nombre=payload.nombre,
-        email=payload.email,
+        username=payload.username,
         password_hash=get_password_hash(payload.password),
-        github_username=payload.github_username,
         rol=payload.rol,
         activo=True,
     )
