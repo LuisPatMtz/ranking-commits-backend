@@ -110,7 +110,8 @@ class GroupRankingItemOut(BaseModel):
     commits_count: int
     commits_points: float
     docente_grade: float
-    proyecto_grade: float
+    streak_days: int = 0
+    streak_points: float = 0.0
     peer_vote_avg: float = 0.0
     peer_vote_points: float = 0.0
     promedio: float
@@ -119,7 +120,6 @@ class GroupRankingItemOut(BaseModel):
 class GroupRankingGradesUpdateRequest(BaseModel):
     usuario_id: int
     docente_grade: float | None = None
-    proyecto_grade: float | None = None
 
 
 # --- Peer voting ---
@@ -147,6 +147,17 @@ class CompañeroVotable(BaseModel):
     mi_voto: int | None = None  # estrellas que yo le di este periodo (None = aún no voté)
 
 
+class VotoRecibidoOut(BaseModel):
+    id: int
+    votante_id: int
+    votante_nombre: str
+    estrellas: int
+    periodo: str
+
+    class Config:
+        from_attributes = True
+
+
 class MiPerfilAlumno(BaseModel):
     usuario_id: int
     nombre: str
@@ -172,7 +183,8 @@ class GeneralRankingItemOut(BaseModel):
     metric_value: int
     metric_points: float
     docente_grade: float
-    proyecto_grade: float
+    streak_days: int = 0
+    streak_points: float = 0.0
     total_score: float
 
 

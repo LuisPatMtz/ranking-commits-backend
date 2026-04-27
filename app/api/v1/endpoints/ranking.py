@@ -14,7 +14,6 @@ from app.models.group import Group
 from app.models.group_user import GroupUser
 from app.models.participant import Participant
 from app.models.peer_vote import PeerVote
-from app.models.project_evaluation import ProjectEvaluation
 from app.models.user import User, UserRole
 from app.schemas.group import GeneralRankingItemOut, GroupRankingGradesUpdateRequest, GroupRankingItemOut
 
@@ -22,6 +21,20 @@ router = APIRouter(prefix="/ranking", tags=["ranking"])
 
 VALID_METRICS = {"todo", "commits", "contribuciones"}
 VALID_PERIODS = {"7d", "30d", "90d", "1y", "all", "custom"}
+
+
+def _calculate_streak(commit_dates: list[date], today: date) -> int:
+    if not commit_dates:
+        return 0
+    unique = sorted(set(commit_dates), reverse=True)
+    streak, expected = 0, today
+    for d in unique:
+        if d == expected:
+            streak += 1
+            expected -= timedelta(days=1)
+        elif d < expected:
+            break
+    return streak
 
 
 def _resolve_owned_group_or_404(db: Session, group_id: int, current_user: User) -> Group:
@@ -76,19 +89,20 @@ def _build_group_ranking(db: Session, group_id: int, docente_id: int, days: int 
     )
     teacher_grade_map = {alumno_id: float(avg_grade or 0) for alumno_id, avg_grade in teacher_rows}
 
-    table_names = set(inspect(db.bind).get_table_names())
-    project_grade_map: dict[int, float] = {}
-    if ProjectEvaluation.__tablename__ in table_names:
-        project_rows = (
-            db.query(ProjectEvaluation.alumno_id, func.avg(ProjectEvaluation.calificacion))
-            .filter(ProjectEvaluation.grupo_id == group_id)
-            .filter(ProjectEvaluation.docente_id == docente_id)
-            .filter(ProjectEvaluation.alumno_id.in_(member_ids))
-            .group_by(ProjectEvaluation.alumno_id)
-            .all()
-        )
-        project_grade_map = {alumno_id: float(avg_grade or 0) for alumno_id, avg_grade in project_rows}
+    today = datetime.now(timezone.utc).date()
+    commit_date_rows_streak = (
+        db.query(Commit.usuario_id, func.date(Commit.fecha).label("d"))
+        .filter(Commit.usuario_id.in_(member_ids))
+        .distinct()
+        .all()
+    )
+    commit_dates_by_member: dict[int, list[date]] = {}
+    for uid, d in commit_date_rows_streak:
+        commit_dates_by_member.setdefault(uid, []).append(d)
+    streak_map = {uid: _calculate_streak(commit_dates_by_member.get(uid, []), today) for uid in member_ids}
+    max_streak = max(streak_map.values(), default=0)
 
+    table_names = set(inspect(db.bind).get_table_names())
     peer_vote_avg_map: dict[int, float] = {}
     if peer_voting_enabled and PeerVote.__tablename__ in table_names:
         now = datetime.now(timezone.utc)
@@ -124,7 +138,8 @@ def _build_group_ranking(db: Session, group_id: int, docente_id: int, days: int 
         commits_points = round(min(commits_points, 100.0), 2)
 
         docente_grade = round(min(max(teacher_grade_map.get(member.usuario_id, 0.0), 0.0), 100.0), 2)
-        proyecto_grade = round(min(max(project_grade_map.get(member.usuario_id, 0.0), 0.0), 100.0), 2)
+        streak_days = streak_map.get(member.usuario_id, 0)
+        streak_points = round((streak_days / max_streak * 100.0), 2) if max_streak > 0 else 0.0
 
         raw_peer_avg = peer_vote_avg_map.get(member.usuario_id, 0.0)
         peer_vote_avg = round(raw_peer_avg, 2)
@@ -132,9 +147,9 @@ def _build_group_ranking(db: Session, group_id: int, docente_id: int, days: int 
         peer_vote_points = round((raw_peer_avg - 1) / 4.0 * 100.0, 2) if raw_peer_avg > 0 else 0.0
 
         if peer_voting_enabled:
-            promedio = round((commits_points + docente_grade + proyecto_grade + peer_vote_points) / 4.0, 2)
+            promedio = round((commits_points + docente_grade + streak_points + peer_vote_points) / 4.0, 2)
         else:
-            promedio = round((commits_points + docente_grade + proyecto_grade) / 3.0, 2)
+            promedio = round((commits_points + docente_grade + streak_points) / 3.0, 2)
 
         ranking_rows.append(
             GroupRankingItemOut(
@@ -145,7 +160,8 @@ def _build_group_ranking(db: Session, group_id: int, docente_id: int, days: int 
                 commits_count=commits_count,
                 commits_points=commits_points,
                 docente_grade=docente_grade,
-                proyecto_grade=proyecto_grade,
+                streak_days=streak_days,
+                streak_points=streak_points,
                 peer_vote_avg=peer_vote_avg,
                 peer_vote_points=peer_vote_points,
                 promedio=promedio,
@@ -356,17 +372,18 @@ def get_general_ranking(
     )
     teacher_grade_map = {(group_id, alumno_id): float(avg_grade or 0) for group_id, alumno_id, avg_grade in teacher_rows}
 
-    table_names = set(inspect(db.bind).get_table_names())
-    project_grade_map: dict[tuple[int, int], float] = {}
-    if ProjectEvaluation.__tablename__ in table_names:
-        project_rows = (
-            db.query(ProjectEvaluation.grupo_id, ProjectEvaluation.alumno_id, func.avg(ProjectEvaluation.calificacion))
-            .filter(ProjectEvaluation.docente_id == current_user.id)
-            .filter(ProjectEvaluation.grupo_id.in_(allowed_group_ids))
-            .group_by(ProjectEvaluation.grupo_id, ProjectEvaluation.alumno_id)
-            .all()
-        )
-        project_grade_map = {(group_id, alumno_id): float(avg_grade or 0) for group_id, alumno_id, avg_grade in project_rows}
+    today = datetime.now(timezone.utc).date()
+    general_date_rows = (
+        db.query(Commit.usuario_id, func.date(Commit.fecha).label("d"))
+        .filter(Commit.usuario_id.in_(member_ids))
+        .distinct()
+        .all()
+    )
+    commit_dates_by_member: dict[int, list[date]] = {}
+    for uid, d in general_date_rows:
+        commit_dates_by_member.setdefault(uid, []).append(d)
+    streak_map = {uid: _calculate_streak(commit_dates_by_member.get(uid, []), today) for uid in member_ids}
+    max_streak = max(streak_map.values(), default=0)
 
     contributions_count_map: dict[int, int] = {}
     if metric in {"todo", "contribuciones"}:
@@ -399,7 +416,8 @@ def get_general_ranking(
             metric_value = contributions_count if member.github_username else commits_count
 
         docente_grade = round(min(max(teacher_grade_map.get((member.grupo_id, member.usuario_id), 0.0), 0.0), 100.0), 2)
-        proyecto_grade = round(min(max(project_grade_map.get((member.grupo_id, member.usuario_id), 0.0), 0.0), 100.0), 2)
+        streak_days = streak_map.get(member.usuario_id, 0)
+        streak_points = round((streak_days / max_streak * 100.0), 2) if max_streak > 0 else 0.0
 
         rows.append(
             GeneralRankingItemOut(
@@ -414,7 +432,8 @@ def get_general_ranking(
                 metric_value=metric_value,
                 metric_points=0.0,
                 docente_grade=docente_grade,
-                proyecto_grade=proyecto_grade,
+                streak_days=streak_days,
+                streak_points=streak_points,
                 total_score=0.0,
             )
         )
@@ -423,7 +442,7 @@ def get_general_ranking(
     for row in rows:
         row.metric_points = round((row.metric_value / max_metric_value * 100.0), 2) if max_metric_value > 0 else 0.0
         row.total_score = (
-            round((row.metric_points + row.docente_grade + row.proyecto_grade) / 3.0, 2)
+            round((row.metric_points + row.docente_grade + row.streak_points) / 3.0, 2)
             if metric == "todo"
             else row.metric_points
         )
@@ -472,34 +491,6 @@ def update_group_ranking_grades(
                     grupo_id=group.id,
                     calificacion=docente_grade,
                     comentario=None,
-                )
-            )
-
-    if payload.proyecto_grade is not None:
-        table_names = set(inspect(db.bind).get_table_names())
-        if ProjectEvaluation.__tablename__ not in table_names:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Falta tabla de evaluaciones de proyecto. Ejecuta init_db para crearla.",
-            )
-
-        proyecto_grade = int(round(min(max(payload.proyecto_grade, 0.0), 100.0)))
-        existing_project_eval = (
-            db.query(ProjectEvaluation)
-            .filter(ProjectEvaluation.alumno_id == payload.usuario_id)
-            .filter(ProjectEvaluation.docente_id == current_user.id)
-            .filter(ProjectEvaluation.grupo_id == group.id)
-            .first()
-        )
-        if existing_project_eval:
-            existing_project_eval.calificacion = proyecto_grade
-        else:
-            db.add(
-                ProjectEvaluation(
-                    alumno_id=payload.usuario_id,
-                    docente_id=current_user.id,
-                    grupo_id=group.id,
-                    calificacion=proyecto_grade,
                 )
             )
 

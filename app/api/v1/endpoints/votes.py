@@ -11,7 +11,7 @@ from app.models.group_user import GroupUser
 from app.models.participant import Participant
 from app.models.peer_vote import PeerVote
 from app.models.user import User, UserRole
-from app.schemas.group import CompañeroVotable, MiPerfilAlumno, PeerVoteCreate, PeerVoteOut
+from app.schemas.group import CompañeroVotable, MiPerfilAlumno, PeerVoteCreate, PeerVoteOut, VotoRecibidoOut
 
 router = APIRouter(tags=["votos"])
 
@@ -231,6 +231,40 @@ def get_mis_votos(
     )
     return [
         PeerVoteOut(id=v.id, votado_id=v.votado_id, votado_nombre=u.nombre, estrellas=v.estrellas, periodo=v.periodo)
+        for v, u in rows
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Votos recibidos por el alumno este periodo en un grupo
+# ---------------------------------------------------------------------------
+
+@router.get("/grupos/{grupo_id}/votos/recibidos", response_model=list[VotoRecibidoOut])
+def get_votos_recibidos(
+    grupo_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _require_alumno(current_user)
+    _get_active_membership(db, grupo_id, current_user.id)
+
+    periodo = _current_periodo()
+    rows = (
+        db.query(PeerVote, User)
+        .join(User, User.id == PeerVote.votante_id)
+        .filter(PeerVote.votado_id == current_user.id)
+        .filter(PeerVote.grupo_id == grupo_id)
+        .filter(PeerVote.periodo == periodo)
+        .all()
+    )
+    return [
+        VotoRecibidoOut(
+            id=v.id,
+            votante_id=v.votante_id,
+            votante_nombre=u.nombre,
+            estrellas=v.estrellas,
+            periodo=v.periodo,
+        )
         for v, u in rows
     ]
 
