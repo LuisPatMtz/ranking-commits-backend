@@ -137,11 +137,13 @@ def register_alumno(payload: RegisterAlumnoRequest, db: Session = Depends(get_db
     if db.query(User).filter(User.username == payload.username).first():
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Username ya registrado")
 
-    github_username = payload.github_username.strip() if payload.github_username else None
-    if github_username:
-        taken = db.query(Participant).filter(Participant.github_username == github_username).first()
-        if taken:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ese username de GitHub ya esta registrado")
+    github_username = payload.github_username.strip() if payload.github_username else ""
+    if not github_username:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El username de GitHub es obligatorio para alumnos")
+
+    taken = db.query(Participant).filter(Participant.github_username == github_username).first()
+    if taken:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ese username de GitHub ya esta registrado")
 
     user = User(
         nombre=payload.nombre,

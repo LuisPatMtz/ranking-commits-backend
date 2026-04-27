@@ -1,7 +1,7 @@
 from sqlalchemy import inspect, text
 
 from app.db.session import Base, engine
-from app.models import commit, docente_invite, evaluation, group, group_share_token, group_student_invite, group_user, participant, project_evaluation, ranking, repository, user
+from app.models import commit, docente_invite, evaluation, group, group_share_token, group_student_invite, group_user, participant, peer_vote, project_evaluation, ranking, repository, user
 
 
 def sync_group_columns() -> None:
@@ -95,6 +95,18 @@ def sync_ranking_columns() -> None:
         )
 
 
+def sync_grupos_peer_voting_column() -> None:
+    inspector = inspect(engine)
+    if "grupos" not in inspector.get_table_names():
+        return
+
+    existing_columns = {column["name"] for column in inspector.get_columns("grupos")}
+
+    with engine.begin() as connection:
+        if "peer_voting_enabled" not in existing_columns:
+            connection.execute(text("ALTER TABLE grupos ADD COLUMN IF NOT EXISTS peer_voting_enabled BOOLEAN NOT NULL DEFAULT FALSE"))
+
+
 def init_db() -> None:
     sync_group_columns()
     sync_group_share_token_columns()
@@ -102,4 +114,5 @@ def init_db() -> None:
     sync_repositorios_columns()
     sync_evaluaciones_docente_columns()
     sync_ranking_columns()
+    sync_grupos_peer_voting_column()
     Base.metadata.create_all(bind=engine)

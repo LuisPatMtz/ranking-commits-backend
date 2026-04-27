@@ -10,6 +10,7 @@ from app.api.v1.endpoints import (
 	ranking,
 	repositories,
 	users,
+	votes,
 )
 
 api_router = APIRouter()
@@ -22,3 +23,4 @@ api_router.include_router(github.router)
 api_router.include_router(commits.router)
 api_router.include_router(evaluations.router)
 api_router.include_router(ranking.router)
+api_router.include_router(votes.router)

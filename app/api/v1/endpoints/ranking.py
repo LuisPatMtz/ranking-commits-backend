@@ -13,6 +13,7 @@ from app.models.evaluation import TeacherEvaluation
 from app.models.group import Group
 from app.models.group_user import GroupUser
 from app.models.participant import Participant
+from app.models.peer_vote import PeerVote
 from app.models.project_evaluation import ProjectEvaluation
 from app.models.user import User, UserRole
 from app.schemas.group import GeneralRankingItemOut, GroupRankingGradesUpdateRequest, GroupRankingItemOut
@@ -38,7 +39,7 @@ def _resolve_owned_group_or_404(db: Session, group_id: int, current_user: User) 
     return group
 
 
-def _build_group_ranking(db: Session, group_id: int, docente_id: int, days: int = 3650) -> list[GroupRankingItemOut]:
+def _build_group_ranking(db: Session, group_id: int, docente_id: int, days: int = 3650, peer_voting_enabled: bool = False) -> list[GroupRankingItemOut]:
     since_date = datetime.now(timezone.utc) - timedelta(days=max(days, 1))
 
     members = (
@@ -88,6 +89,20 @@ def _build_group_ranking(db: Session, group_id: int, docente_id: int, days: int 
         )
         project_grade_map = {alumno_id: float(avg_grade or 0) for alumno_id, avg_grade in project_rows}
 
+    peer_vote_avg_map: dict[int, float] = {}
+    if peer_voting_enabled and PeerVote.__tablename__ in table_names:
+        now = datetime.now(timezone.utc)
+        periodo = f"{now.year}-{now.month:02d}"
+        peer_rows = (
+            db.query(PeerVote.votado_id, func.avg(PeerVote.estrellas))
+            .filter(PeerVote.grupo_id == group_id)
+            .filter(PeerVote.periodo == periodo)
+            .filter(PeerVote.votado_id.in_(member_ids))
+            .group_by(PeerVote.votado_id)
+            .all()
+        )
+        peer_vote_avg_map = {votado_id: float(avg_stars or 0) for votado_id, avg_stars in peer_rows}
+
     max_commits = max(
         (
             member.github_contributions_total
@@ -110,7 +125,16 @@ def _build_group_ranking(db: Session, group_id: int, docente_id: int, days: int 
 
         docente_grade = round(min(max(teacher_grade_map.get(member.usuario_id, 0.0), 0.0), 100.0), 2)
         proyecto_grade = round(min(max(project_grade_map.get(member.usuario_id, 0.0), 0.0), 100.0), 2)
-        promedio = round((commits_points + docente_grade + proyecto_grade) / 3.0, 2)
+
+        raw_peer_avg = peer_vote_avg_map.get(member.usuario_id, 0.0)
+        peer_vote_avg = round(raw_peer_avg, 2)
+        # Normalize 1-5 stars → 0-100 points (no votes = 0 pts)
+        peer_vote_points = round((raw_peer_avg - 1) / 4.0 * 100.0, 2) if raw_peer_avg > 0 else 0.0
+
+        if peer_voting_enabled:
+            promedio = round((commits_points + docente_grade + proyecto_grade + peer_vote_points) / 4.0, 2)
+        else:
+            promedio = round((commits_points + docente_grade + proyecto_grade) / 3.0, 2)
 
         ranking_rows.append(
             GroupRankingItemOut(
@@ -122,6 +146,8 @@ def _build_group_ranking(db: Session, group_id: int, docente_id: int, days: int 
                 commits_points=commits_points,
                 docente_grade=docente_grade,
                 proyecto_grade=proyecto_grade,
+                peer_vote_avg=peer_vote_avg,
+                peer_vote_points=peer_vote_points,
                 promedio=promedio,
             )
         )
@@ -261,7 +287,7 @@ def get_group_ranking(
     current_user: User = Depends(get_current_user),
 ):
     group = _resolve_owned_group_or_404(db, grupo_id, current_user)
-    return _build_group_ranking(db, group.id, current_user.id, days)
+    return _build_group_ranking(db, group.id, current_user.id, days, peer_voting_enabled=group.peer_voting_enabled)
 
 
 @router.get("/general", response_model=list[GeneralRankingItemOut])

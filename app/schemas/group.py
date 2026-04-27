@@ -21,6 +21,7 @@ class GroupOut(BaseModel):
     carrera: str
     semestre: int
     created_by_user_id: int | None
+    peer_voting_enabled: bool = False
 
     class Config:
         from_attributes = True
@@ -110,6 +111,8 @@ class GroupRankingItemOut(BaseModel):
     commits_points: float
     docente_grade: float
     proyecto_grade: float
+    peer_vote_avg: float = 0.0
+    peer_vote_points: float = 0.0
     promedio: float
 
 
@@ -117,6 +120,44 @@ class GroupRankingGradesUpdateRequest(BaseModel):
     usuario_id: int
     docente_grade: float | None = None
     proyecto_grade: float | None = None
+
+
+# --- Peer voting ---
+
+class PeerVoteCreate(BaseModel):
+    votado_id: int
+    estrellas: int  # 1-5
+
+
+class PeerVoteOut(BaseModel):
+    id: int
+    votado_id: int
+    votado_nombre: str
+    estrellas: int
+    periodo: str
+
+    class Config:
+        from_attributes = True
+
+
+class CompañeroVotable(BaseModel):
+    usuario_id: int
+    nombre: str
+    github_username: str | None = None
+    mi_voto: int | None = None  # estrellas que yo le di este periodo (None = aún no voté)
+
+
+class MiPerfilAlumno(BaseModel):
+    usuario_id: int
+    nombre: str
+    github_username: str | None = None
+    github_contributions_total: int | None = None
+    grupo_id: int | None = None
+    grupo_nombre: str | None = None
+    peer_voting_enabled: bool = False
+    mi_rank: int | None = None
+    commits_count: int = 0
+    promedio: float = 0.0
 
 
 class GeneralRankingItemOut(BaseModel):

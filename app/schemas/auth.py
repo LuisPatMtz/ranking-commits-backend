@@ -20,7 +20,7 @@ class RegisterAlumnoRequest(BaseModel):
     nombre: str
     username: str
     password: str
-    github_username: str | None = None
+    github_username: str
 
 
 class AuthUserSummary(BaseModel):
