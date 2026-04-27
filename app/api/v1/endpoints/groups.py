@@ -1,5 +1,5 @@
 from datetime import date, datetime, timedelta, timezone
-from secrets import token_urlsafe
+from secrets import token_urlsafe  # noqa: F401 (usado en _generate_invite_code y create_student_invite)
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -8,6 +8,7 @@ from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models.group import Group
 from app.models.group_share_token import GroupShareToken
+from app.models.group_student_invite import GroupStudentInvite
 from app.models.group_user import GroupUser
 from app.models.participant import Participant
 from app.models.user import User, UserRole
@@ -16,6 +17,7 @@ from app.schemas.group import (
     GroupInviteCreatedResponse,
     GroupInviteNotificationOut,
     GroupOut,
+    GroupStudentInviteResponse,
     GroupUpdate,
     GroupStudentAddRequest,
     GroupStudentCandidateOut,
@@ -29,6 +31,7 @@ from app.schemas.group import (
 router = APIRouter(prefix="/grupos", tags=["grupos"])
 
 SHARE_LINK_EXPIRES_MINUTES = 60 * 24
+STUDENT_INVITE_EXPIRES_DAYS = 30
 
 
 def _generate_invite_code() -> str:
@@ -502,7 +505,7 @@ def accept_group_invite(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Esta invitacion ya fue utilizada")
     _ensure_invite_not_expired(link_token)
 
-    if link_token.owner_docente_id == current_user.id:
+    if link_token.owner_docente_id == current_user.id:  # noqa: SIM102
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No puedes aceptar tu propia invitacion")
 
     if link_token.invited_docente_id is not None and link_token.invited_docente_id != current_user.id:
@@ -530,4 +533,34 @@ def accept_group_invite(
         target_docente_id=current_user.id,
         target_docente_username=current_user.username,
         copied_students=copied_students,
+    )
+
+
+@router.post("/{group_id}/invitar-alumnos", response_model=GroupStudentInviteResponse, status_code=status.HTTP_201_CREATED)
+def create_student_invite(
+    group_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    group = _resolve_owned_group_or_404(db, group_id, current_user)
+
+    token = token_urlsafe(32)
+    expires_at = datetime.now(timezone.utc) + timedelta(days=STUDENT_INVITE_EXPIRES_DAYS)
+
+    invite = GroupStudentInvite(
+        token=token,
+        grupo_id=group.id,
+        created_by_docente_id=current_user.id,
+        expires_at=expires_at,
+    )
+    db.add(invite)
+    db.commit()
+
+    return GroupStudentInviteResponse(
+        message="Link de registro para alumnos generado",
+        invite_token=token,
+        grupo_id=group.id,
+        grupo_nombre=group.nombre,
+        registro_url=f"/registro?invite={token}&tipo=alumno",
+        expires_in_days=STUDENT_INVITE_EXPIRES_DAYS,
     )

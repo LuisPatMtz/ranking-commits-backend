@@ -438,7 +438,6 @@ def update_group_ranking_grades(
         )
         if existing_teacher_eval:
             existing_teacher_eval.calificacion = docente_grade
-            existing_teacher_eval.puntos_importancia = 100
         else:
             db.add(
                 TeacherEvaluation(
@@ -446,7 +445,6 @@ def update_group_ranking_grades(
                     docente_id=current_user.id,
                     grupo_id=group.id,
                     calificacion=docente_grade,
-                    puntos_importancia=100,
                     comentario=None,
                 )
             )

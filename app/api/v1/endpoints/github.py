@@ -92,7 +92,6 @@ def sync_user_commits(
                     repo=repo_name,
                     url=html_url,
                     usuario_id=usuario_id,
-                    proyecto_nombre=repo_name,
                     activo=True,
                 )
                 db.add(repo)

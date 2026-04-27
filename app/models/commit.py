@@ -1,4 +1,4 @@
-from sqlalchemy import DateTime, ForeignKey, Integer, String, UniqueConstraint, func
+from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.session import Base
@@ -6,7 +6,11 @@ from app.db.session import Base
 
 class Commit(Base):
     __tablename__ = "commits"
-    __table_args__ = (UniqueConstraint("sha", name="uq_commit_sha"),)
+    __table_args__ = (
+        UniqueConstraint("sha", name="uq_commit_sha"),
+        # Patrón dominante en ranking: commits de un usuario en un rango de fechas
+        Index("ix_commits_usuario_fecha", "usuario_id", "fecha"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     sha: Mapped[str] = mapped_column(String(100), nullable=False)

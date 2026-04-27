@@ -133,3 +133,12 @@ class GeneralRankingItemOut(BaseModel):
     docente_grade: float
     proyecto_grade: float
     total_score: float
+
+
+class GroupStudentInviteResponse(BaseModel):
+    message: str
+    invite_token: str
+    grupo_id: int
+    grupo_nombre: str
+    registro_url: str
+    expires_in_days: int

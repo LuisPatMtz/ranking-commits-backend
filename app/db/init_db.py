@@ -1,7 +1,7 @@
 from sqlalchemy import inspect, text
 
 from app.db.session import Base, engine
-from app.models import commit, evaluation, group, group_share_token, group_user, participant, project_evaluation, ranking, repository, user
+from app.models import commit, docente_invite, evaluation, group, group_share_token, group_student_invite, group_user, participant, project_evaluation, ranking, repository, user
 
 
 def sync_group_columns() -> None:
@@ -12,9 +12,9 @@ def sync_group_columns() -> None:
     existing_columns = {column["name"] for column in inspector.get_columns("grupos")}
 
     with engine.begin() as connection:
-        columns_to_drop = [column for column in ("turno", "periodo") if column in existing_columns]
-        for column_name in columns_to_drop:
-            connection.execute(text(f"ALTER TABLE grupos DROP COLUMN IF EXISTS {column_name}"))
+        for col in ("turno", "periodo"):
+            if col in existing_columns:
+                connection.execute(text(f"ALTER TABLE grupos DROP COLUMN IF EXISTS {col}"))
 
         if "created_by_user_id" not in existing_columns:
             connection.execute(text("ALTER TABLE grupos ADD COLUMN IF NOT EXISTS created_by_user_id INTEGER"))
@@ -53,8 +53,53 @@ def sync_participant_columns() -> None:
             connection.execute(text("ALTER TABLE participantes ADD COLUMN IF NOT EXISTS github_contributions_updated_at TIMESTAMPTZ"))
 
 
+def sync_repositorios_columns() -> None:
+    inspector = inspect(engine)
+    if "repositorios" not in inspector.get_table_names():
+        return
+
+    existing_columns = {column["name"] for column in inspector.get_columns("repositorios")}
+
+    with engine.begin() as connection:
+        if "proyecto_nombre" in existing_columns:
+            connection.execute(text("ALTER TABLE repositorios DROP COLUMN IF EXISTS proyecto_nombre"))
+
+
+def sync_evaluaciones_docente_columns() -> None:
+    inspector = inspect(engine)
+    if "evaluaciones_docente" not in inspector.get_table_names():
+        return
+
+    existing_columns = {column["name"] for column in inspector.get_columns("evaluaciones_docente")}
+
+    with engine.begin() as connection:
+        if "puntos_importancia" in existing_columns:
+            connection.execute(text("ALTER TABLE evaluaciones_docente DROP COLUMN IF EXISTS puntos_importancia"))
+
+
+def sync_ranking_columns() -> None:
+    inspector = inspect(engine)
+    if "ranking" not in inspector.get_table_names():
+        return
+
+    with engine.begin() as connection:
+        # Migrar columnas de INTEGER a DOUBLE PRECISION
+        for col in ("puntos_commits", "puntos_docente", "puntos_proyecto", "total"):
+            connection.execute(
+                text(f"ALTER TABLE ranking ALTER COLUMN {col} TYPE DOUBLE PRECISION USING {col}::double precision")
+            )
+        # Corregir constraint de rango (antes era 0-500, ahora es 0-100 porque es promedio)
+        connection.execute(text("ALTER TABLE ranking DROP CONSTRAINT IF EXISTS ck_total_range"))
+        connection.execute(
+            text("ALTER TABLE ranking ADD CONSTRAINT ck_total_range CHECK (total >= 0 AND total <= 100)")
+        )
+
+
 def init_db() -> None:
     sync_group_columns()
     sync_group_share_token_columns()
     sync_participant_columns()
+    sync_repositorios_columns()
+    sync_evaluaciones_docente_columns()
+    sync_ranking_columns()
     Base.metadata.create_all(bind=engine)
