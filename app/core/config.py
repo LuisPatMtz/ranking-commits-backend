@@ -16,6 +16,10 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 60
     database_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/ranking_commits"
     github_token: str | None = None
+    allowed_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+
+    def get_allowed_origins(self) -> list[str]:
+        return [o.strip() for o in self.allowed_origins.split(",") if o.strip()]
 
 
 settings = Settings()

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.core.config import settings
 from app.db.session import get_db
 from app.models.commit import Commit
 from app.models.participant import Participant
@@ -58,6 +59,7 @@ def sync_user_commits(
     headers = {
         "Accept": "application/vnd.github+json",
         "User-Agent": "ranking-commits-app",
+        **({"Authorization": f"token {settings.github_token}"} if settings.github_token else {}),
     }
 
     synced_repos = 0

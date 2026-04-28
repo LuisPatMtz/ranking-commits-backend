@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 
 from pydantic import BaseModel
 
@@ -6,20 +6,23 @@ from pydantic import BaseModel
 class GroupCreate(BaseModel):
     nombre: str
     carrera: str
-    semestre: int
+    fecha_inicio: datetime
+    fecha_cierre: datetime
 
 
 class GroupUpdate(BaseModel):
     nombre: str
     carrera: str
-    semestre: int
+    fecha_inicio: datetime
+    fecha_cierre: datetime
 
 
 class GroupOut(BaseModel):
     id: int
     nombre: str
     carrera: str
-    semestre: int
+    fecha_inicio: datetime
+    fecha_cierre: datetime
     created_by_user_id: int | None
     peer_voting_enabled: bool = False
 
@@ -66,7 +69,8 @@ class GroupInviteNotificationOut(BaseModel):
     source_group_id: int
     source_group_nombre: str
     source_group_carrera: str
-    source_group_semestre: int
+    source_group_fecha_inicio: datetime
+    source_group_fecha_cierre: datetime
     invited_by_docente_id: int
     invited_by_docente_username: str
 
@@ -109,17 +113,11 @@ class GroupRankingItemOut(BaseModel):
     github_username: str | None = None
     commits_count: int
     commits_points: float
-    docente_grade: float
     streak_days: int = 0
     streak_points: float = 0.0
     peer_vote_avg: float = 0.0
     peer_vote_points: float = 0.0
     promedio: float
-
-
-class GroupRankingGradesUpdateRequest(BaseModel):
-    usuario_id: int
-    docente_grade: float | None = None
 
 
 # --- Peer voting ---
@@ -134,7 +132,6 @@ class PeerVoteOut(BaseModel):
     votado_id: int
     votado_nombre: str
     estrellas: int
-    periodo: str
 
     class Config:
         from_attributes = True
@@ -144,15 +141,13 @@ class CompañeroVotable(BaseModel):
     usuario_id: int
     nombre: str
     github_username: str | None = None
-    mi_voto: int | None = None  # estrellas que yo le di este periodo (None = aún no voté)
+    mi_voto: int | None = None
 
 
 class VotoRecibidoOut(BaseModel):
     id: int
     votante_id: int
     votante_nombre: str
-    estrellas: int
-    periodo: str
 
     class Config:
         from_attributes = True
@@ -163,11 +158,14 @@ class MiPerfilAlumno(BaseModel):
     nombre: str
     github_username: str | None = None
     github_contributions_total: int | None = None
-    grupo_id: int | None = None
-    grupo_nombre: str | None = None
+    proyecto_id: int | None = None
+    proyecto_nombre: str | None = None
     peer_voting_enabled: bool = False
     mi_rank: int | None = None
+    total_en_proyecto: int | None = None
     commits_count: int = 0
+    streak_days: int = 0
+    peer_vote_avg: float = 0.0
     promedio: float = 0.0
 
 
@@ -182,7 +180,6 @@ class GeneralRankingItemOut(BaseModel):
     contributions_count: int
     metric_value: int
     metric_points: float
-    docente_grade: float
     streak_days: int = 0
     streak_points: float = 0.0
     total_score: float
@@ -191,7 +188,24 @@ class GeneralRankingItemOut(BaseModel):
 class GroupStudentInviteResponse(BaseModel):
     message: str
     invite_token: str
-    grupo_id: int
-    grupo_nombre: str
+    proyecto_id: int
+    proyecto_nombre: str
     registro_url: str
     expires_in_days: int
+
+
+# --- Competidores anónimos ---
+
+class AnonymousCompetitorCreate(BaseModel):
+    nombre: str
+    github_username: str | None = None
+
+
+class AnonymousCompetitorOut(BaseModel):
+    id: int
+    nombre: str
+    github_username: str | None = None
+    is_claimed: bool
+
+    class Config:
+        from_attributes = True

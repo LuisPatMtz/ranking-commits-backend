@@ -1,24 +1,27 @@
 from sqlalchemy import inspect, text
 
 from app.db.session import Base, engine
-from app.models import commit, docente_invite, evaluation, group, group_share_token, group_student_invite, group_user, participant, peer_vote, project_evaluation, ranking, repository, user
+from app.models import anonymous_competitor, commit, docente_invite, group, group_share_token, group_student_invite, group_user, participant, peer_vote, ranking, repository, user
 
 
-def sync_group_columns() -> None:
+def sync_proyecto_columns() -> None:
     inspector = inspect(engine)
-    if "grupos" not in inspector.get_table_names():
+    if "proyectos" not in inspector.get_table_names():
         return
 
-    existing_columns = {column["name"] for column in inspector.get_columns("grupos")}
+    existing_columns = {column["name"] for column in inspector.get_columns("proyectos")}
 
     with engine.begin() as connection:
         for col in ("turno", "periodo"):
             if col in existing_columns:
-                connection.execute(text(f"ALTER TABLE grupos DROP COLUMN IF EXISTS {col}"))
+                connection.execute(text(f"ALTER TABLE proyectos DROP COLUMN IF EXISTS {col}"))
 
         if "created_by_user_id" not in existing_columns:
-            connection.execute(text("ALTER TABLE grupos ADD COLUMN IF NOT EXISTS created_by_user_id INTEGER"))
-            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_grupos_created_by_user_id ON grupos (created_by_user_id)"))
+            connection.execute(text("ALTER TABLE proyectos ADD COLUMN IF NOT EXISTS created_by_user_id INTEGER"))
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_proyectos_created_by_user_id ON proyectos (created_by_user_id)"))
+        
+        if "peer_voting_enabled" not in existing_columns:
+            connection.execute(text("ALTER TABLE proyectos ADD COLUMN IF NOT EXISTS peer_voting_enabled BOOLEAN NOT NULL DEFAULT FALSE"))
 
 
 def sync_group_share_token_columns() -> None:
@@ -65,17 +68,6 @@ def sync_repositorios_columns() -> None:
             connection.execute(text("ALTER TABLE repositorios DROP COLUMN IF EXISTS proyecto_nombre"))
 
 
-def sync_evaluaciones_docente_columns() -> None:
-    inspector = inspect(engine)
-    if "evaluaciones_docente" not in inspector.get_table_names():
-        return
-
-    existing_columns = {column["name"] for column in inspector.get_columns("evaluaciones_docente")}
-
-    with engine.begin() as connection:
-        if "puntos_importancia" in existing_columns:
-            connection.execute(text("ALTER TABLE evaluaciones_docente DROP COLUMN IF EXISTS puntos_importancia"))
-
 
 def sync_ranking_columns() -> None:
     inspector = inspect(engine)
@@ -96,6 +88,7 @@ def sync_ranking_columns() -> None:
 
 
 def sync_grupos_peer_voting_column() -> None:
+    """Migración legacy: sincroniza tabla 'grupos' si existe. Será removida después."""
     inspector = inspect(engine)
     if "grupos" not in inspector.get_table_names():
         return
@@ -108,11 +101,10 @@ def sync_grupos_peer_voting_column() -> None:
 
 
 def init_db() -> None:
-    sync_group_columns()
+    sync_proyecto_columns()
     sync_group_share_token_columns()
     sync_participant_columns()
     sync_repositorios_columns()
-    sync_evaluaciones_docente_columns()
     sync_ranking_columns()
-    sync_grupos_peer_voting_column()
+    sync_grupos_peer_voting_column()  # Legacy: por si existe tabla vieja
     Base.metadata.create_all(bind=engine)

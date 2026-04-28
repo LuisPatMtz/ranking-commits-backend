@@ -3,7 +3,6 @@ from fastapi import APIRouter
 from app.api.v1.endpoints import (
 	auth,
 	commits,
-	evaluations,
 	github,
 	groups,
 	participants,
@@ -21,6 +20,5 @@ api_router.include_router(repositories.router)
 api_router.include_router(participants.router)
 api_router.include_router(github.router)
 api_router.include_router(commits.router)
-api_router.include_router(evaluations.router)
 api_router.include_router(ranking.router)
 api_router.include_router(votes.router)

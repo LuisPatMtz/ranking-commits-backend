@@ -16,31 +16,41 @@ from app.schemas.group import CompañeroVotable, MiPerfilAlumno, PeerVoteCreate,
 router = APIRouter(tags=["votos"])
 
 
-def _current_periodo() -> str:
-    now = datetime.now(timezone.utc)
-    return f"{now.year}-{now.month:02d}"
-
-
 def _require_alumno(current_user: User) -> None:
     if current_user.rol != UserRole.alumno:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Solo alumnos pueden acceder a esta sección")
 
 
-def _get_active_membership(db: Session, grupo_id: int, usuario_id: int) -> GroupUser:
+def _get_active_membership(db: Session, proyecto_id: int, usuario_id: int) -> GroupUser:
     membership = (
         db.query(GroupUser)
-        .filter(GroupUser.grupo_id == grupo_id)
+        .filter(GroupUser.proyecto_id == proyecto_id)
         .filter(GroupUser.usuario_id == usuario_id)
         .filter(GroupUser.fecha_fin.is_(None))
         .first()
     )
     if not membership:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No perteneces a este grupo")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No perteneces a este proyecto")
     return membership
 
 
+def _get_project_or_404(db: Session, proyecto_id: int) -> Group:
+    group = db.query(Group).filter(Group.id == proyecto_id).first()
+    if not group:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Proyecto no encontrado")
+    return group
+
+
+def _validate_voting_open(group: Group) -> None:
+    now = datetime.now(timezone.utc)
+    fecha_inicio = group.fecha_inicio if group.fecha_inicio.tzinfo else group.fecha_inicio.replace(tzinfo=timezone.utc)
+    fecha_cierre = group.fecha_cierre if group.fecha_cierre.tzinfo else group.fecha_cierre.replace(tzinfo=timezone.utc)
+    if now < fecha_inicio or now > fecha_cierre:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Las votaciones solo están disponibles durante el periodo activo del proyecto")
+
+
 # ---------------------------------------------------------------------------
-# Perfil del alumno (su grupo, ranking y contribuciones)
+# Perfil del alumno (su proyecto, ranking y contribuciones)
 # ---------------------------------------------------------------------------
 
 @router.get("/alumnos/mi-perfil", response_model=MiPerfilAlumno)
@@ -68,51 +78,53 @@ def get_mi_perfil(
             github_contributions_total=participant.github_contributions_total if participant else None,
         )
 
-    group = db.query(Group).filter(Group.id == membership.grupo_id).first()
+    group = db.query(Group).filter(Group.id == membership.proyecto_id).first()
 
-    from app.models.commit import Commit
-    commit_count = (
-        db.query(func.count(Commit.id))
-        .filter(Commit.usuario_id == current_user.id)
-        .scalar() or 0
-    )
+    from app.api.v1.endpoints.ranking import _build_group_ranking
+    ranking_rows = _build_group_ranking(db, group, peer_voting_enabled=group.peer_voting_enabled if group else False)
+
+    mi_fila = next((r for r in ranking_rows if r.usuario_id == current_user.id), None)
 
     return MiPerfilAlumno(
         usuario_id=current_user.id,
         nombre=current_user.nombre,
         github_username=participant.github_username if participant else None,
         github_contributions_total=participant.github_contributions_total if participant else None,
-        grupo_id=membership.grupo_id,
-        grupo_nombre=group.nombre if group else None,
+        proyecto_id=membership.proyecto_id,
+        proyecto_nombre=group.nombre if group else None,
         peer_voting_enabled=group.peer_voting_enabled if group else False,
-        commits_count=commit_count,
+        mi_rank=mi_fila.rank if mi_fila else None,
+        total_en_proyecto=len(ranking_rows),
+        commits_count=mi_fila.commits_count if mi_fila else 0,
+        streak_days=mi_fila.streak_days if mi_fila else 0,
+        peer_vote_avg=mi_fila.peer_vote_avg if mi_fila else 0.0,
+        promedio=mi_fila.promedio if mi_fila else 0.0,
     )
 
 
 # ---------------------------------------------------------------------------
-# Compañeros a los que puedo votar en este periodo
+# Compañeros a los que puedo votar en este proyecto
 # ---------------------------------------------------------------------------
 
-@router.get("/grupos/{grupo_id}/votos/companeros", response_model=list[CompañeroVotable])
+@router.get("/proyectos/{proyecto_id}/votos/companeros", response_model=list[CompañeroVotable])
 def get_companeros_votables(
-    grupo_id: int,
+    proyecto_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     _require_alumno(current_user)
-    _get_active_membership(db, grupo_id, current_user.id)
+    _get_active_membership(db, proyecto_id, current_user.id)
 
-    group = db.query(Group).filter(Group.id == grupo_id).first()
-    if not group or not group.peer_voting_enabled:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Las votaciones no están habilitadas en este grupo")
-
-    periodo = _current_periodo()
+    group = _get_project_or_404(db, proyecto_id)
+    if not group.peer_voting_enabled:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Las votaciones no están habilitadas en este proyecto")
+    _validate_voting_open(group)
 
     members = (
         db.query(GroupUser.usuario_id, User.nombre, Participant.github_username)
         .join(User, User.id == GroupUser.usuario_id)
         .outerjoin(Participant, Participant.usuario_id == User.id)
-        .filter(GroupUser.grupo_id == grupo_id)
+        .filter(GroupUser.proyecto_id == proyecto_id)
         .filter(GroupUser.fecha_fin.is_(None))
         .filter(User.rol == UserRole.alumno)
         .filter(User.id != current_user.id)
@@ -120,12 +132,11 @@ def get_companeros_votables(
         .all()
     )
 
-    mis_votos_this_period = {
+    mis_votos = {
         v.votado_id: v.estrellas
         for v in db.query(PeerVote)
         .filter(PeerVote.votante_id == current_user.id)
-        .filter(PeerVote.grupo_id == grupo_id)
-        .filter(PeerVote.periodo == periodo)
+        .filter(PeerVote.proyecto_id == proyecto_id)
         .all()
     }
 
@@ -134,29 +145,30 @@ def get_companeros_votables(
             usuario_id=m.usuario_id,
             nombre=m.nombre,
             github_username=m.github_username,
-            mi_voto=mis_votos_this_period.get(m.usuario_id),
+            mi_voto=mis_votos.get(m.usuario_id),
         )
         for m in members
     ]
 
 
 # ---------------------------------------------------------------------------
-# Votar a un compañero (crea o actualiza el voto del periodo actual)
+# Votar a un compañero (crea o actualiza el voto, una vez por proyecto)
 # ---------------------------------------------------------------------------
 
-@router.post("/grupos/{grupo_id}/votos", response_model=PeerVoteOut, status_code=status.HTTP_201_CREATED)
+@router.post("/proyectos/{proyecto_id}/votos", response_model=PeerVoteOut, status_code=status.HTTP_201_CREATED)
 def votar_companero(
-    grupo_id: int,
+    proyecto_id: int,
     payload: PeerVoteCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     _require_alumno(current_user)
-    _get_active_membership(db, grupo_id, current_user.id)
+    _get_active_membership(db, proyecto_id, current_user.id)
 
-    group = db.query(Group).filter(Group.id == grupo_id).first()
-    if not group or not group.peer_voting_enabled:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Las votaciones no están habilitadas en este grupo")
+    group = _get_project_or_404(db, proyecto_id)
+    if not group.peer_voting_enabled:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Las votaciones no están habilitadas en este proyecto")
+    _validate_voting_open(group)
 
     if payload.votado_id == current_user.id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No puedes votarte a ti mismo")
@@ -164,20 +176,17 @@ def votar_companero(
     if payload.estrellas < 1 or payload.estrellas > 5:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Las estrellas deben ser entre 1 y 5")
 
-    _get_active_membership(db, grupo_id, payload.votado_id)
+    _get_active_membership(db, proyecto_id, payload.votado_id)
 
     votado = db.query(User).filter(User.id == payload.votado_id).first()
     if not votado or votado.rol != UserRole.alumno:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Compañero no encontrado")
 
-    periodo = _current_periodo()
-
     existing = (
         db.query(PeerVote)
         .filter(PeerVote.votante_id == current_user.id)
         .filter(PeerVote.votado_id == payload.votado_id)
-        .filter(PeerVote.grupo_id == grupo_id)
-        .filter(PeerVote.periodo == periodo)
+        .filter(PeerVote.proyecto_id == proyecto_id)
         .first()
     )
 
@@ -190,9 +199,8 @@ def votar_companero(
         vote = PeerVote(
             votante_id=current_user.id,
             votado_id=payload.votado_id,
-            grupo_id=grupo_id,
+            proyecto_id=proyecto_id,
             estrellas=payload.estrellas,
-            periodo=periodo,
         )
         db.add(vote)
         db.commit()
@@ -203,58 +211,53 @@ def votar_companero(
         votado_id=vote.votado_id,
         votado_nombre=votado.nombre,
         estrellas=vote.estrellas,
-        periodo=vote.periodo,
     )
 
 
 # ---------------------------------------------------------------------------
-# Mis votos emitidos este periodo en un grupo
+# Mis votos emitidos en un proyecto
 # ---------------------------------------------------------------------------
 
-@router.get("/grupos/{grupo_id}/votos/mis-votos", response_model=list[PeerVoteOut])
+@router.get("/proyectos/{proyecto_id}/votos/mis-votos", response_model=list[PeerVoteOut])
 def get_mis_votos(
-    grupo_id: int,
+    proyecto_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     _require_alumno(current_user)
-    _get_active_membership(db, grupo_id, current_user.id)
+    _get_active_membership(db, proyecto_id, current_user.id)
 
-    periodo = _current_periodo()
     rows = (
         db.query(PeerVote, User)
         .join(User, User.id == PeerVote.votado_id)
         .filter(PeerVote.votante_id == current_user.id)
-        .filter(PeerVote.grupo_id == grupo_id)
-        .filter(PeerVote.periodo == periodo)
+        .filter(PeerVote.proyecto_id == proyecto_id)
         .all()
     )
     return [
-        PeerVoteOut(id=v.id, votado_id=v.votado_id, votado_nombre=u.nombre, estrellas=v.estrellas, periodo=v.periodo)
+        PeerVoteOut(id=v.id, votado_id=v.votado_id, votado_nombre=u.nombre, estrellas=v.estrellas)
         for v, u in rows
     ]
 
 
 # ---------------------------------------------------------------------------
-# Votos recibidos por el alumno este periodo en un grupo
+# Votos recibidos por el alumno en un proyecto
 # ---------------------------------------------------------------------------
 
-@router.get("/grupos/{grupo_id}/votos/recibidos", response_model=list[VotoRecibidoOut])
+@router.get("/proyectos/{proyecto_id}/votos/recibidos", response_model=list[VotoRecibidoOut])
 def get_votos_recibidos(
-    grupo_id: int,
+    proyecto_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     _require_alumno(current_user)
-    _get_active_membership(db, grupo_id, current_user.id)
+    _get_active_membership(db, proyecto_id, current_user.id)
 
-    periodo = _current_periodo()
     rows = (
         db.query(PeerVote, User)
         .join(User, User.id == PeerVote.votante_id)
         .filter(PeerVote.votado_id == current_user.id)
-        .filter(PeerVote.grupo_id == grupo_id)
-        .filter(PeerVote.periodo == periodo)
+        .filter(PeerVote.proyecto_id == proyecto_id)
         .all()
     )
     return [
@@ -262,8 +265,6 @@ def get_votos_recibidos(
             id=v.id,
             votante_id=v.votante_id,
             votante_nombre=u.nombre,
-            estrellas=v.estrellas,
-            periodo=v.periodo,
         )
         for v, u in rows
     ]
@@ -273,9 +274,9 @@ def get_votos_recibidos(
 # Toggle peer voting (docente)
 # ---------------------------------------------------------------------------
 
-@router.patch("/grupos/{grupo_id}/peer-voting")
+@router.patch("/proyectos/{proyecto_id}/peer-voting")
 def toggle_peer_voting(
-    grupo_id: int,
+    proyecto_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -284,13 +285,13 @@ def toggle_peer_voting(
 
     group = (
         db.query(Group)
-        .filter(Group.id == grupo_id)
+        .filter(Group.id == proyecto_id)
         .filter(Group.created_by_user_id == current_user.id)
         .first()
     )
     if not group:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Grupo no encontrado o sin permisos")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Proyecto no encontrado o sin permisos")
 
     group.peer_voting_enabled = not group.peer_voting_enabled
     db.commit()
-    return {"grupo_id": group.id, "peer_voting_enabled": group.peer_voting_enabled}
+    return {"proyecto_id": group.id, "peer_voting_enabled": group.peer_voting_enabled}

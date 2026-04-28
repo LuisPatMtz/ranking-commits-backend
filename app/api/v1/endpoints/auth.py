@@ -8,6 +8,7 @@ from app.api.deps import get_current_user
 from app.core.config import settings
 from app.core.security import create_access_token, get_password_hash, verify_password
 from app.db.session import get_db
+from app.models.anonymous_competitor import AnonymousCompetitor
 from app.models.docente_invite import DocenteInvite
 from app.models.group import Group
 from app.models.group_student_invite import GroupStudentInvite
@@ -74,12 +75,12 @@ def validate_invite(token: str, tipo: str, db: Session = Depends(get_db)):
         )
         if not invite or invite.expires_at < now or invite.usos_actuales >= invite.max_usos:
             return InviteValidateResponse(tipo="alumno", valid=False)
-        group = db.query(Group).filter(Group.id == invite.grupo_id).first()
+        group = db.query(Group).filter(Group.id == invite.proyecto_id).first()
         return InviteValidateResponse(
             tipo="alumno",
             valid=True,
             grupo_nombre=group.nombre if group else None,
-            grupo_id=invite.grupo_id,
+            grupo_id=invite.proyecto_id,
         )
 
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="tipo debe ser 'docente' o 'alumno'")
@@ -164,7 +165,7 @@ def register_alumno(payload: RegisterAlumnoRequest, db: Session = Depends(get_db
     db.flush()
 
     membership = GroupUser(
-        grupo_id=invite.grupo_id,
+        proyecto_id=invite.proyecto_id,
         usuario_id=user.id,
         fecha_inicio=date.today(),
     )
@@ -172,12 +173,24 @@ def register_alumno(payload: RegisterAlumnoRequest, db: Session = Depends(get_db
 
     invite.usos_actuales += 1
 
+    # Reclamar perfil anónimo si hay uno con el mismo github_username en este proyecto
+    anon = (
+        db.query(AnonymousCompetitor)
+        .filter(AnonymousCompetitor.proyecto_id == invite.proyecto_id)
+        .filter(AnonymousCompetitor.github_username == github_username)
+        .filter(AnonymousCompetitor.claimed_by_user_id.is_(None))
+        .first()
+    )
+    if anon:
+        anon.claimed_by_user_id = user.id
+
     db.commit()
     return {
         "id": user.id,
         "username": user.username,
         "rol": user.rol,
-        "grupo_id": invite.grupo_id,
+        "proyecto_id": invite.proyecto_id,
+        "claimed_anon": anon.id if anon else None,
     }
 
 

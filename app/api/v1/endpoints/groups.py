@@ -1,11 +1,12 @@
 from datetime import date, datetime, timedelta, timezone
-from secrets import token_urlsafe  # noqa: F401 (usado en _generate_invite_code y create_student_invite)
+from secrets import token_urlsafe  # noqa: F401
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.db.session import get_db
+from app.models.anonymous_competitor import AnonymousCompetitor
 from app.models.group import Group
 from app.models.group_share_token import GroupShareToken
 from app.models.group_student_invite import GroupStudentInvite
@@ -13,6 +14,8 @@ from app.models.group_user import GroupUser
 from app.models.participant import Participant
 from app.models.user import User, UserRole
 from app.schemas.group import (
+    AnonymousCompetitorCreate,
+    AnonymousCompetitorOut,
     GroupCreate,
     GroupInviteCreatedResponse,
     GroupInviteNotificationOut,
@@ -28,14 +31,13 @@ from app.schemas.group import (
     TeacherShareTarget,
 )
 
-router = APIRouter(prefix="/grupos", tags=["grupos"])
+router = APIRouter(prefix="/proyectos", tags=["proyectos"])
 
 SHARE_LINK_EXPIRES_MINUTES = 60 * 24
 STUDENT_INVITE_EXPIRES_DAYS = 30
 
 
 def _generate_invite_code() -> str:
-    # 8-10 chars URL-safe keeps links short and easy to share.
     return token_urlsafe(6).replace("-", "").replace("_", "")[:10]
 
 
@@ -47,7 +49,7 @@ def _resolve_source_group_or_404(db: Session, group_id: int, owner_docente_id: i
         .first()
     )
     if not source_group:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Grupo no encontrado o sin permisos")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Proyecto no encontrado o sin permisos")
     return source_group
 
 
@@ -81,7 +83,7 @@ def _ensure_invite_not_expired(invite: GroupShareToken) -> None:
 
 def _resolve_owned_group_or_404(db: Session, group_id: int, current_user: User) -> Group:
     if current_user.rol != UserRole.docente:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Solo docentes pueden administrar grupos")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Solo docentes pueden administrar proyectos")
 
     group = (
         db.query(Group)
@@ -90,7 +92,7 @@ def _resolve_owned_group_or_404(db: Session, group_id: int, current_user: User) 
         .first()
     )
     if not group:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Grupo no encontrado o sin permisos")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Proyecto no encontrado o sin permisos")
     return group
 
 
@@ -100,30 +102,30 @@ def _clone_group_for_docente(db: Session, source_group: Group, target_docente: U
         .filter(Group.created_by_user_id == target_docente.id)
         .filter(Group.nombre == source_group.nombre)
         .filter(Group.carrera == source_group.carrera)
-        .filter(Group.semestre == source_group.semestre)
         .first()
     )
     if already_exists:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Ese docente ya tiene una copia de este grupo",
+            detail="Ese docente ya tiene una copia de este proyecto",
         )
 
     shared_group = Group(
         nombre=source_group.nombre,
         carrera=source_group.carrera,
-        semestre=source_group.semestre,
+        fecha_inicio=source_group.fecha_inicio,
+        fecha_cierre=source_group.fecha_cierre,
         created_by_user_id=target_docente.id,
     )
     db.add(shared_group)
     db.flush()
 
-    source_members = db.query(GroupUser).filter(GroupUser.grupo_id == source_group.id).all()
+    source_members = db.query(GroupUser).filter(GroupUser.proyecto_id == source_group.id).all()
     copied_students = 0
     for membership in source_members:
         db.add(
             GroupUser(
-                grupo_id=shared_group.id,
+                proyecto_id=shared_group.id,
                 usuario_id=membership.usuario_id,
                 fecha_inicio=membership.fecha_inicio,
                 fecha_fin=membership.fecha_fin,
@@ -137,12 +139,13 @@ def _clone_group_for_docente(db: Session, source_group: Group, target_docente: U
 @router.post("", response_model=GroupOut, status_code=status.HTTP_201_CREATED)
 def create_group(payload: GroupCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     if current_user.rol != UserRole.docente:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Solo docentes pueden crear grupos")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Solo docentes pueden crear proyectos")
 
     group = Group(
         nombre=payload.nombre,
         carrera=payload.carrera,
-        semestre=payload.semestre,
+        fecha_inicio=payload.fecha_inicio,
+        fecha_cierre=payload.fecha_cierre,
         created_by_user_id=current_user.id,
     )
     db.add(group)
@@ -154,7 +157,7 @@ def create_group(payload: GroupCreate, db: Session = Depends(get_db), current_us
 @router.get("", response_model=list[GroupOut])
 def list_groups(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     if current_user.rol != UserRole.docente:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Solo docentes pueden consultar grupos")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Solo docentes pueden consultar proyectos")
 
     return (
         db.query(Group)
@@ -175,7 +178,8 @@ def update_group(
 
     group.nombre = payload.nombre
     group.carrera = payload.carrera
-    group.semestre = payload.semestre
+    group.fecha_inicio = payload.fecha_inicio
+    group.fecha_cierre = payload.fecha_cierre
     db.commit()
     db.refresh(group)
     return group
@@ -189,7 +193,7 @@ def list_group_students(group_id: int, db: Session = Depends(get_db), current_us
         db.query(GroupUser, User, Participant)
         .join(User, User.id == GroupUser.usuario_id)
         .join(Participant, Participant.usuario_id == User.id)
-        .filter(GroupUser.grupo_id == group.id)
+        .filter(GroupUser.proyecto_id == group.id)
         .order_by(User.nombre.asc())
         .all()
     )
@@ -215,7 +219,7 @@ def list_group_student_candidates(group_id: int, db: Session = Depends(get_db), 
     current_member_ids = {
         row[0]
         for row in db.query(GroupUser.usuario_id)
-        .filter(GroupUser.grupo_id == group.id)
+        .filter(GroupUser.proyecto_id == group.id)
         .all()
     }
 
@@ -275,15 +279,15 @@ def add_student_to_group(
 
     exists = (
         db.query(GroupUser)
-        .filter(GroupUser.grupo_id == group.id)
+        .filter(GroupUser.proyecto_id == group.id)
         .filter(GroupUser.usuario_id == user.id)
         .first()
     )
     if exists:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El alumno ya pertenece al grupo")
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="El alumno ya pertenece al proyecto")
 
     membership = GroupUser(
-        grupo_id=group.id,
+        proyecto_id=group.id,
         usuario_id=user.id,
         fecha_inicio=payload.fecha_inicio or date.today(),
         fecha_fin=None,
@@ -315,16 +319,16 @@ def remove_student_from_group(
 
     membership = (
         db.query(GroupUser)
-        .filter(GroupUser.grupo_id == group.id)
+        .filter(GroupUser.proyecto_id == group.id)
         .filter(GroupUser.usuario_id == usuario_id)
         .first()
     )
     if not membership:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Alumno no pertenece al grupo")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Alumno no pertenece al proyecto")
 
     db.delete(membership)
     db.commit()
-    return {"message": "Alumno removido del grupo"}
+    return {"message": "Alumno removido del proyecto"}
 
 
 @router.delete("/{group_id}/alumnos/participantes/{participant_id}")
@@ -342,16 +346,16 @@ def remove_participant_from_group(
 
     membership = (
         db.query(GroupUser)
-        .filter(GroupUser.grupo_id == group.id)
+        .filter(GroupUser.proyecto_id == group.id)
         .filter(GroupUser.usuario_id == participant.usuario_id)
         .first()
     )
     if not membership:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Participante no pertenece al grupo")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Participante no pertenece al proyecto")
 
     db.delete(membership)
     db.commit()
-    return {"message": "Participante removido del grupo"}
+    return {"message": "Participante removido del proyecto"}
 
 
 @router.get("/docentes/buscar", response_model=list[TeacherShareTarget])
@@ -383,14 +387,14 @@ def share_group(
     current_user: User = Depends(get_current_user),
 ):
     if current_user.rol != UserRole.docente:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Solo docentes pueden compartir grupos")
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Solo docentes pueden compartir proyectos")
 
     source_group = _resolve_source_group_or_404(db, group_id, current_user.id)
     target_docente = _resolve_target_docente_or_404(db, payload, current_user.id)
 
     already_pending = (
         db.query(GroupShareToken)
-        .filter(GroupShareToken.group_id == source_group.id)
+        .filter(GroupShareToken.proyecto_id == source_group.id)
         .filter(GroupShareToken.owner_docente_id == current_user.id)
         .filter(GroupShareToken.invited_docente_id == target_docente.id)
         .filter(GroupShareToken.used_by_docente_id.is_(None))
@@ -405,7 +409,7 @@ def share_group(
     db.add(
         GroupShareToken(
             token_jti=invite_code,
-            group_id=source_group.id,
+            proyecto_id=source_group.id,
             owner_docente_id=current_user.id,
             invited_docente_id=target_docente.id,
             expires_at=expire,
@@ -438,7 +442,7 @@ def create_group_share_link(
     db.add(
         GroupShareToken(
             token_jti=invite_code,
-            group_id=source_group.id,
+            proyecto_id=source_group.id,
             owner_docente_id=current_user.id,
             expires_at=expire,
         )
@@ -463,7 +467,7 @@ def list_my_group_invites(
 
     rows = (
         db.query(GroupShareToken, Group, User)
-        .join(Group, Group.id == GroupShareToken.group_id)
+        .join(Group, Group.id == GroupShareToken.proyecto_id)
         .join(User, User.id == GroupShareToken.owner_docente_id)
         .filter(GroupShareToken.used_by_docente_id.is_(None))
         .filter(GroupShareToken.expires_at > datetime.now(timezone.utc))
@@ -480,7 +484,8 @@ def list_my_group_invites(
                 source_group_id=group.id,
                 source_group_nombre=group.nombre,
                 source_group_carrera=group.carrera,
-                source_group_semestre=group.semestre,
+                source_group_fecha_inicio=group.fecha_inicio,
+                source_group_fecha_cierre=group.fecha_cierre,
                 invited_by_docente_id=owner.id,
                 invited_by_docente_username=owner.username,
             )
@@ -505,7 +510,7 @@ def accept_group_invite(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Esta invitacion ya fue utilizada")
     _ensure_invite_not_expired(link_token)
 
-    if link_token.owner_docente_id == current_user.id:  # noqa: SIM102
+    if link_token.owner_docente_id == current_user.id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No puedes aceptar tu propia invitacion")
 
     if link_token.invited_docente_id is not None and link_token.invited_docente_id != current_user.id:
@@ -513,12 +518,12 @@ def accept_group_invite(
 
     source_group = (
         db.query(Group)
-        .filter(Group.id == link_token.group_id)
+        .filter(Group.id == link_token.proyecto_id)
         .filter(Group.created_by_user_id == link_token.owner_docente_id)
         .first()
     )
     if not source_group:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="El grupo de origen ya no existe")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="El proyecto de origen ya no existe")
 
     shared_group, copied_students = _clone_group_for_docente(db, source_group, current_user)
     link_token.used_by_docente_id = current_user.id
@@ -527,7 +532,7 @@ def accept_group_invite(
     db.refresh(shared_group)
 
     return GroupShareResponse(
-        message="Grupo compartido correctamente",
+        message="Proyecto compartido correctamente",
         source_group_id=source_group.id,
         shared_group_id=shared_group.id,
         target_docente_id=current_user.id,
@@ -549,7 +554,7 @@ def create_student_invite(
 
     invite = GroupStudentInvite(
         token=token,
-        grupo_id=group.id,
+        proyecto_id=group.id,
         created_by_docente_id=current_user.id,
         expires_at=expires_at,
     )
@@ -559,8 +564,76 @@ def create_student_invite(
     return GroupStudentInviteResponse(
         message="Link de registro para alumnos generado",
         invite_token=token,
-        grupo_id=group.id,
-        grupo_nombre=group.nombre,
+        proyecto_id=group.id,
+        proyecto_nombre=group.nombre,
         registro_url=f"/registro?invite={token}&tipo=alumno",
         expires_in_days=STUDENT_INVITE_EXPIRES_DAYS,
     )
+
+
+# ---------------------------------------------------------------------------
+# Competidores anónimos
+# ---------------------------------------------------------------------------
+
+@router.post("/{group_id}/competidores/anonimos", response_model=AnonymousCompetitorOut, status_code=status.HTTP_201_CREATED)
+def add_anonymous_competitor(
+    group_id: int,
+    payload: AnonymousCompetitorCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _resolve_owned_group_or_404(db, group_id, current_user)
+
+    anon = AnonymousCompetitor(
+        nombre=payload.nombre.strip(),
+        github_username=payload.github_username.strip() if payload.github_username else None,
+        proyecto_id=group_id,
+    )
+    db.add(anon)
+    db.commit()
+    db.refresh(anon)
+    return AnonymousCompetitorOut(
+        id=anon.id,
+        nombre=anon.nombre,
+        github_username=anon.github_username,
+        is_claimed=anon.claimed_by_user_id is not None,
+    )
+
+
+@router.get("/{group_id}/competidores/anonimos", response_model=list[AnonymousCompetitorOut])
+def list_anonymous_competitors(
+    group_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _resolve_owned_group_or_404(db, group_id, current_user)
+    rows = db.query(AnonymousCompetitor).filter(AnonymousCompetitor.proyecto_id == group_id).all()
+    return [
+        AnonymousCompetitorOut(
+            id=r.id,
+            nombre=r.nombre,
+            github_username=r.github_username,
+            is_claimed=r.claimed_by_user_id is not None,
+        )
+        for r in rows
+    ]
+
+
+@router.delete("/{group_id}/competidores/anonimos/{anon_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_anonymous_competitor(
+    group_id: int,
+    anon_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _resolve_owned_group_or_404(db, group_id, current_user)
+    anon = (
+        db.query(AnonymousCompetitor)
+        .filter(AnonymousCompetitor.id == anon_id)
+        .filter(AnonymousCompetitor.proyecto_id == group_id)
+        .first()
+    )
+    if not anon:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Competidor anónimo no encontrado")
+    db.delete(anon)
+    db.commit()
