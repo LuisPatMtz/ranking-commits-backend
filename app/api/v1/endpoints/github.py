@@ -1,8 +1,9 @@
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import re
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
@@ -14,6 +15,32 @@ from app.models.repository import Repository
 from app.models.user import User
 
 router = APIRouter(prefix="/github", tags=["github"])
+
+
+def _compute_streak(db: Session, usuario_id: int) -> int:
+    today = datetime.now(timezone.utc).date()
+    yesterday = today - timedelta(days=1)
+    rows = (
+        db.query(func.date(Commit.fecha).label("d"))
+        .filter(Commit.usuario_id == usuario_id)
+        .distinct()
+        .all()
+    )
+    unique_dates: set[date] = {r.d for r in rows}
+    if not unique_dates:
+        return 0
+    start = today if today in unique_dates else (yesterday if yesterday in unique_dates else None)
+    if start is None:
+        return 0
+    streak = 0
+    expected = start
+    for d in sorted(unique_dates, reverse=True):
+        if d == expected:
+            streak += 1
+            expected -= timedelta(days=1)
+        elif d < expected:
+            break
+    return streak
 
 
 def _fetch_public_contributions_total(client: httpx.Client, github_username: str) -> int | None:
@@ -139,6 +166,8 @@ def sync_user_commits(
 
     db.commit()
 
+    streak_days = _compute_streak(db, usuario_id)
+
     return {
         "message": "Sync completado",
         "usuario_id": usuario_id,
@@ -146,5 +175,6 @@ def sync_user_commits(
         "repos_nuevos": synced_repos,
         "commits_nuevos": synced_commits,
         "contribuciones_totales": contributions_total,
+        "streak_days": streak_days,
         "since": since_iso,
     }

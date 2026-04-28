@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.db.session import get_db
-from app.models.group import Group
+from app.models.group import Proyecto as Group
 from app.models.group_user import GroupUser
 from app.models.participant import Participant
 from app.models.peer_vote import PeerVote

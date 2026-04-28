@@ -10,7 +10,7 @@ from app.core.security import create_access_token, get_password_hash, verify_pas
 from app.db.session import get_db
 from app.models.anonymous_competitor import AnonymousCompetitor
 from app.models.docente_invite import DocenteInvite
-from app.models.group import Group
+from app.models.group import Proyecto as Group
 from app.models.group_student_invite import GroupStudentInvite
 from app.models.group_user import GroupUser
 from app.models.participant import Participant

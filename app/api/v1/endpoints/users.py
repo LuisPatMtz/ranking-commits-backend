@@ -7,7 +7,7 @@ from app.core.security import get_password_hash
 from app.db.session import get_db
 from app.models.commit import Commit
 from app.models.docente_invite import DocenteInvite
-from app.models.group import Group
+from app.models.group import Proyecto as Group
 from app.models.group_student_invite import GroupStudentInvite
 from app.models.participant import Participant
 from app.models.user import User, UserRole

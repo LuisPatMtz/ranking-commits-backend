@@ -2,7 +2,7 @@ from datetime import date, datetime, time, timedelta, timezone
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, inspect
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 import httpx
 
@@ -10,7 +10,7 @@ from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models.anonymous_competitor import AnonymousCompetitor
 from app.models.commit import Commit
-from app.models.group import Group
+from app.models.group import Proyecto as Group
 from app.models.group_user import GroupUser
 from app.models.participant import Participant
 from app.models.peer_vote import PeerVote
@@ -26,9 +26,18 @@ VALID_PERIODS = {"7d", "30d", "90d", "1y", "all", "custom"}
 def _calculate_streak(commit_dates: list[date], today: date) -> int:
     if not commit_dates:
         return 0
-    unique = sorted(set(commit_dates), reverse=True)
-    streak, expected = 0, today
-    for d in unique:
+    unique_dates = set(commit_dates)
+    yesterday = today - timedelta(days=1)
+    # Si no hubo commit hoy pero sí ayer, la racha sigue activa
+    if today in unique_dates:
+        start = today
+    elif yesterday in unique_dates:
+        start = yesterday
+    else:
+        return 0
+    streak = 0
+    expected = start
+    for d in sorted(unique_dates, reverse=True):
         if d == expected:
             streak += 1
             expected -= timedelta(days=1)
@@ -97,9 +106,8 @@ def _build_group_ranking(db: Session, group: Group, peer_voting_enabled: bool = 
     streak_map = {uid: _calculate_streak(commit_dates_by_member.get(uid, []), effective_today) for uid in member_ids}
     max_streak = max(streak_map.values(), default=0)
 
-    table_names = set(inspect(db.bind).get_table_names())
     peer_vote_avg_map: dict[int, float] = {}
-    if peer_voting_enabled and PeerVote.__tablename__ in table_names:
+    if peer_voting_enabled:
         peer_rows = (
             db.query(PeerVote.votado_id, func.avg(PeerVote.estrellas))
             .filter(PeerVote.proyecto_id == group.id)

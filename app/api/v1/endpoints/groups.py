@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models.anonymous_competitor import AnonymousCompetitor
-from app.models.group import Group
+from app.models.group import Proyecto as Group
 from app.models.group_share_token import GroupShareToken
 from app.models.group_student_invite import GroupStudentInvite
 from app.models.group_user import GroupUser
