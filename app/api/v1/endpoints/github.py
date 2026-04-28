@@ -8,8 +8,10 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.config import settings
+from app.core.github_scraper import fetch_contribution_cells_for_year
 from app.db.session import get_db
 from app.models.commit import Commit
+from app.models.daily_contribution import DailyContribution
 from app.models.participant import Participant
 from app.models.repository import Repository
 from app.models.user import User
@@ -161,6 +163,31 @@ def sync_user_commits(
                 )
                 synced_commits += 1
 
+        # Scraping del heatmap de GitHub (commits + PRs + issues + reviews)
+        # Se hace dentro del bloque `with` para reutilizar la conexión abierta
+        sync_from_date = since_dt.date()
+        sync_to_date = datetime.now(timezone.utc).date()
+        synced_daily = 0
+        for year in range(sync_from_date.year, sync_to_date.year + 1):
+            daily_cells = fetch_contribution_cells_for_year(client, github_username, year)
+            for contribution_date, contribution_count in daily_cells.items():
+                if sync_from_date <= contribution_date <= sync_to_date:
+                    existing_daily = (
+                        db.query(DailyContribution)
+                        .filter(DailyContribution.usuario_id == usuario_id)
+                        .filter(DailyContribution.fecha == contribution_date)
+                        .first()
+                    )
+                    if existing_daily:
+                        existing_daily.count = contribution_count
+                    else:
+                        db.add(DailyContribution(
+                            usuario_id=usuario_id,
+                            fecha=contribution_date,
+                            count=contribution_count,
+                        ))
+                        synced_daily += 1
+
     participant.github_contributions_total = contributions_total
     participant.github_contributions_updated_at = datetime.now(timezone.utc)
 
@@ -174,6 +201,7 @@ def sync_user_commits(
         "github_username": github_username,
         "repos_nuevos": synced_repos,
         "commits_nuevos": synced_commits,
+        "dias_contribucion_nuevos": synced_daily,
         "contribuciones_totales": contributions_total,
         "streak_days": streak_days,
         "since": since_iso,

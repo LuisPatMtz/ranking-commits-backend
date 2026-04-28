@@ -1,5 +1,6 @@
 from app.models.anonymous_competitor import AnonymousCompetitor
 from app.models.commit import Commit
+from app.models.daily_contribution import DailyContribution
 from app.models.group import Proyecto
 from app.models.group_share_token import GroupShareToken
 from app.models.group_student_invite import GroupStudentInvite
@@ -16,6 +17,7 @@ Group = Proyecto
 __all__ = [
 	"AnonymousCompetitor",
 	"Commit",
+	"DailyContribution",
 	"Group",
 	"Proyecto",
 	"GroupShareToken",

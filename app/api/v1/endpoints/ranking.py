@@ -1,5 +1,4 @@
 from datetime import date, datetime, time, timedelta, timezone
-import re
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import func
@@ -7,9 +6,11 @@ from sqlalchemy.orm import Session
 import httpx
 
 from app.api.deps import get_current_user
+from app.core.github_scraper import fetch_available_contribution_years, fetch_contribution_cells_for_year
 from app.db.session import get_db
 from app.models.anonymous_competitor import AnonymousCompetitor
 from app.models.commit import Commit
+from app.models.daily_contribution import DailyContribution
 from app.models.group import Proyecto as Group
 from app.models.group_user import GroupUser
 from app.models.participant import Participant
@@ -79,31 +80,52 @@ def _build_group_ranking(db: Session, group: Group, peer_voting_enabled: bool = 
         return []
 
     member_ids = [row.usuario_id for row in members]
+    project_start_date = project_start.date()
+    project_end_date = project_end.date()
 
-    commit_rows = (
-        db.query(Commit.usuario_id, func.count(Commit.id))
-        .filter(Commit.usuario_id.in_(member_ids))
-        .filter(Commit.fecha >= project_start)
-        .filter(Commit.fecha <= project_end)
-        .group_by(Commit.usuario_id)
+    # Contribuciones diarias (commits + PRs + issues + reviews — todo lo del heatmap de GitHub)
+    daily_rows = (
+        db.query(DailyContribution.usuario_id, DailyContribution.fecha, DailyContribution.count)
+        .filter(DailyContribution.usuario_id.in_(member_ids))
+        .filter(DailyContribution.fecha >= project_start_date)
+        .filter(DailyContribution.fecha <= project_end_date)
         .all()
     )
-    commit_count_map = {usuario_id: int(count) for usuario_id, count in commit_rows}
+    activity_count_map: dict[int, int] = {}
+    activity_dates_by_member: dict[int, list[date]] = {}
+    for uid, fecha, cnt in daily_rows:
+        if cnt > 0:
+            activity_count_map[uid] = activity_count_map.get(uid, 0) + cnt
+            activity_dates_by_member.setdefault(uid, []).append(fecha)
+
+    # Fallback: alumnos que aún no sincronizaron su heatmap usan commits de la BD
+    members_without_daily = [uid for uid in member_ids if uid not in activity_count_map]
+    if members_without_daily:
+        commit_rows = (
+            db.query(Commit.usuario_id, func.count(Commit.id))
+            .filter(Commit.usuario_id.in_(members_without_daily))
+            .filter(Commit.fecha >= project_start)
+            .filter(Commit.fecha <= project_end)
+            .group_by(Commit.usuario_id)
+            .all()
+        )
+        for uid, cnt in commit_rows:
+            activity_count_map[uid] = int(cnt)
+
+        commit_date_rows = (
+            db.query(Commit.usuario_id, func.date(Commit.fecha).label("d"))
+            .filter(Commit.usuario_id.in_(members_without_daily))
+            .filter(Commit.fecha >= project_start)
+            .filter(Commit.fecha <= project_end)
+            .distinct()
+            .all()
+        )
+        for uid, d in commit_date_rows:
+            activity_dates_by_member.setdefault(uid, []).append(d)
 
     today = datetime.now(timezone.utc).date()
-    effective_today = min(today, group.fecha_cierre.date() if hasattr(group.fecha_cierre, "date") else group.fecha_cierre)
-    commit_date_rows_streak = (
-        db.query(Commit.usuario_id, func.date(Commit.fecha).label("d"))
-        .filter(Commit.usuario_id.in_(member_ids))
-        .filter(Commit.fecha >= project_start)
-        .filter(Commit.fecha <= project_end)
-        .distinct()
-        .all()
-    )
-    commit_dates_by_member: dict[int, list[date]] = {}
-    for uid, d in commit_date_rows_streak:
-        commit_dates_by_member.setdefault(uid, []).append(d)
-    streak_map = {uid: _calculate_streak(commit_dates_by_member.get(uid, []), effective_today) for uid in member_ids}
+    effective_today = min(today, project_end_date)
+    streak_map = {uid: _calculate_streak(activity_dates_by_member.get(uid, []), effective_today) for uid in member_ids}
     max_streak = max(streak_map.values(), default=0)
 
     peer_vote_avg_map: dict[int, float] = {}
@@ -117,12 +139,12 @@ def _build_group_ranking(db: Session, group: Group, peer_voting_enabled: bool = 
         )
         peer_vote_avg_map = {votado_id: float(avg_stars or 0) for votado_id, avg_stars in peer_rows}
 
-    max_commits = max(commit_count_map.get(m.usuario_id, 0) for m in members) if members else 0
+    max_activity = max(activity_count_map.get(m.usuario_id, 0) for m in members) if members else 0
 
     ranking_rows: list[GroupRankingItemOut] = []
     for member in members:
-        commits_count = commit_count_map.get(member.usuario_id, 0)
-        commits_points = round((commits_count / max_commits * 100.0), 2) if max_commits > 0 else 0.0
+        commits_count = activity_count_map.get(member.usuario_id, 0)
+        commits_points = round((commits_count / max_activity * 100.0), 2) if max_activity > 0 else 0.0
 
         streak_days = streak_map.get(member.usuario_id, 0)
         streak_points = round((streak_days / max_streak * 100.0), 2) if max_streak > 0 else 0.0
@@ -240,70 +262,6 @@ def _resolve_period_range(period: str, from_date: date | None, to_date: date | N
     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Periodo no valido")
 
 
-def _parse_tooltip_count(tooltip_text: str) -> int:
-    if "No contributions" in tooltip_text:
-        return 0
-
-    match = re.search(r"([\d,]+)\s+contributions?", tooltip_text, re.IGNORECASE)
-    if not match:
-        return 0
-    return int(match.group(1).replace(",", ""))
-
-
-def _fetch_available_contribution_years(client: httpx.Client, github_username: str) -> list[int]:
-    resp = client.get(
-        f"https://github.com/users/{github_username}/contributions",
-        headers={
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "User-Agent": "Mozilla/5.0",
-        },
-        timeout=20.0,
-    )
-    if resp.status_code != 200:
-        return [datetime.now(timezone.utc).year]
-
-    years = sorted({int(year) for year in re.findall(r'id="year-link-(\d{4})"', resp.text)}, reverse=True)
-    return years or [datetime.now(timezone.utc).year]
-
-
-def _fetch_contribution_cells_for_year(client: httpx.Client, github_username: str, year: int) -> dict[date, int]:
-    resp = client.get(
-        f"https://github.com/users/{github_username}/contributions?from={year}-01-01&to={year}-12-31",
-        headers={
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "User-Agent": "Mozilla/5.0",
-        },
-        timeout=20.0,
-    )
-    if resp.status_code != 200:
-        return {}
-
-    html = resp.text
-    date_by_component_id: dict[str, date] = {}
-    for match in re.finditer(
-        r'<td[^>]*data-date="([0-9]{4}-[0-9]{2}-[0-9]{2})"[^>]*id="(contribution-day-component-[^"]+)"|<td[^>]*id="(contribution-day-component-[^"]+)"[^>]*data-date="([0-9]{4}-[0-9]{2}-[0-9]{2})"',
-        html,
-    ):
-        cell_date = match.group(1) or match.group(4)
-        component_id = match.group(2) or match.group(3)
-        if cell_date and component_id:
-            date_by_component_id[component_id] = date.fromisoformat(cell_date)
-
-    tooltip_count_by_component_id = {
-        component_id: _parse_tooltip_count(re.sub(r"\s+", " ", tooltip_text.strip()))
-        for component_id, tooltip_text in re.findall(
-            r'<tool-tip[^>]*for="(contribution-day-component-[^"]+)"[^>]*>(.*?)</tool-tip>',
-            html,
-            re.S,
-        )
-    }
-
-    result: dict[date, int] = {}
-    for component_id, cell_date in date_by_component_id.items():
-        result[cell_date] = tooltip_count_by_component_id.get(component_id, 0)
-    return result
-
-
 def _fetch_contributions_total_for_period(
     client: httpx.Client,
     github_username: str,
@@ -312,7 +270,7 @@ def _fetch_contributions_total_for_period(
     cache: dict[tuple[str, int], dict[date, int]],
 ) -> int:
     if start_date is None or end_date is None:
-        years = _fetch_available_contribution_years(client, github_username)
+        years = fetch_available_contribution_years(client, github_username)
         if not years:
             return 0
         start_date = date(min(years), 1, 1)
@@ -324,7 +282,7 @@ def _fetch_contributions_total_for_period(
     for year in years:
         cache_key = (github_username, year)
         if cache_key not in cache:
-            cache[cache_key] = _fetch_contribution_cells_for_year(client, github_username, year)
+            cache[cache_key] = fetch_contribution_cells_for_year(client, github_username, year)
 
         for contribution_date, contribution_count in cache[cache_key].items():
             if start_date <= contribution_date <= end_date:

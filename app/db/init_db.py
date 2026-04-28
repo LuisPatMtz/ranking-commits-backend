@@ -1,7 +1,7 @@
 from sqlalchemy import inspect, text
 
 from app.db.session import Base, engine
-from app.models import anonymous_competitor, commit, docente_invite, group, group_share_token, group_student_invite, group_user, participant, peer_vote, ranking, repository, user
+from app.models import anonymous_competitor, commit, daily_contribution, docente_invite, group, group_share_token, group_student_invite, group_user, participant, peer_vote, ranking, repository, user
 
 
 def sync_proyecto_columns() -> None:
