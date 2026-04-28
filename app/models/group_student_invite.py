@@ -5,16 +5,15 @@ from app.db.session import Base
 
 
 class GroupStudentInvite(Base):
-    __tablename__ = "invitaciones_alumno_grupo"
+    __tablename__ = "invitaciones_alumno_proyecto"
     __table_args__ = (
-        Index("ix_student_invite_grupo_activo", "grupo_id", "activo"),
+        Index("ix_student_invite_proyecto_activo", "proyecto_id", "activo"),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
     token: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
-    grupo_id: Mapped[int] = mapped_column(ForeignKey("grupos.id"), nullable=False, index=True)
+    proyecto_id: Mapped[int] = mapped_column(ForeignKey("proyectos.id"), nullable=False, index=True)
     created_by_docente_id: Mapped[int] = mapped_column(ForeignKey("usuarios.id"), nullable=False, index=True)
-    # Un link sirve para toda la clase, no se gasta con el primer alumno
     max_usos: Mapped[int] = mapped_column(Integer, default=200, nullable=False)
     usos_actuales: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     activo: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
