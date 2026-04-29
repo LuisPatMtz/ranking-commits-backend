@@ -22,7 +22,12 @@ Backend base para plataforma de ranking academico.
    `python scripts/init_db.py`
    Si cambiaste el modelo de datos y quieres rehacer tablas locales:
    `python scripts/reset_db.py`
-6. Inicia API:
+6. (Opcional) Crea usuario admin de prueba:
+   `python scripts/seed_db.py`
+   Credenciales por defecto: usuario `admin` / contraseña `Admin1234!`
+   Puedes especificar otra contraseña:
+   `python scripts/seed_db.py --password MiPasswordSeguro123`
+7. Inicia API:
    `python -m uvicorn app.main:app --reload`
 
 ## Endpoints base
