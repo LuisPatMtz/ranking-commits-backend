@@ -94,14 +94,31 @@ def sync_user_commits(
     synced_repos = 0
     synced_commits = 0
 
+    def _get_next_url(response: httpx.Response) -> str | None:
+        link_header = response.headers.get("link", "")
+        for part in link_header.split(","):
+            part = part.strip()
+            if 'rel="next"' in part:
+                url_part = part.split(";")[0].strip()
+                return url_part.strip("<>")
+        return None
+
     with httpx.Client(timeout=20.0, headers=headers) as client:
         contributions_total = _fetch_public_contributions_total(client, github_username)
 
-        repos_resp = client.get(f"https://api.github.com/users/{github_username}/repos", params={"per_page": 100, "type": "owner", "sort": "updated"})
-        if repos_resp.status_code != 200:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No se pudieron obtener repositorios de GitHub")
-
-        repos = repos_resp.json()
+        repos: list[dict] = []
+        next_url: str | None = str(
+            httpx.URL("https://api.github.com/users/{username}/repos".format(username=github_username),
+                      params={"per_page": 100, "type": "owner", "sort": "updated"})
+        )
+        while next_url:
+            repos_resp = client.get(next_url)
+            if repos_resp.status_code != 200:
+                if not repos:
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No se pudieron obtener repositorios de GitHub")
+                break
+            repos.extend(repos_resp.json())
+            next_url = _get_next_url(repos_resp)
 
         for repo_data in repos:
             owner = repo_data.get("owner", {}).get("login")
@@ -129,39 +146,50 @@ def sync_user_commits(
                 db.flush()
                 synced_repos += 1
 
-            commits_resp = client.get(
-                f"https://api.github.com/repos/{owner}/{repo_name}/commits",
-                params={"author": github_username, "since": since_iso, "per_page": 100},
-            )
-            if commits_resp.status_code != 200:
-                continue
-
-            for commit_data in commits_resp.json():
-                sha = commit_data.get("sha")
-                commit_obj = commit_data.get("commit", {})
-                message = commit_obj.get("message")
-                date_str = commit_obj.get("author", {}).get("date")
-                url = commit_data.get("html_url")
-                if not sha or not message or not date_str or not url:
-                    continue
-
-                exists = db.query(Commit).filter(Commit.sha == sha).first()
-                if exists:
-                    continue
-
-                commit_date = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-                db.add(
-                    Commit(
-                        sha=sha,
-                        usuario_id=usuario_id,
-                        repositorio_id=repo.id,
-                        mensaje=message[:500],
-                        fecha=commit_date,
-                        url=url,
-                        puntos=1,
-                    )
+            commits_next_url: str | None = str(
+                httpx.URL(
+                    "https://api.github.com/repos/{owner}/{repo}/commits".format(owner=owner, repo=repo_name),
+                    params={"author": github_username, "since": since_iso, "per_page": 100},
                 )
-                synced_commits += 1
+            )
+            while commits_next_url:
+                commits_resp = client.get(commits_next_url)
+                if commits_resp.status_code != 200:
+                    break
+
+                page_commits = commits_resp.json()
+                if not page_commits:
+                    break
+
+                for commit_data in page_commits:
+                    sha = commit_data.get("sha")
+                    commit_obj = commit_data.get("commit", {})
+                    message = commit_obj.get("message")
+                    date_str = commit_obj.get("author", {}).get("date")
+                    url = commit_data.get("html_url")
+                    if not sha or not message or not date_str or not url:
+                        continue
+
+                    exists = db.query(Commit).filter(Commit.sha == sha).first()
+                    if exists:
+                        commits_next_url = None
+                        break
+
+                    commit_date = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+                    db.add(
+                        Commit(
+                            sha=sha,
+                            usuario_id=usuario_id,
+                            repositorio_id=repo.id,
+                            mensaje=message[:500],
+                            fecha=commit_date,
+                            url=url,
+                            puntos=1,
+                        )
+                    )
+                    synced_commits += 1
+                else:
+                    commits_next_url = _get_next_url(commits_resp)
 
         # Scraping del heatmap de GitHub (commits + PRs + issues + reviews)
         # Se hace dentro del bloque `with` para reutilizar la conexión abierta
